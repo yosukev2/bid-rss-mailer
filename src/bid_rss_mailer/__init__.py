@@ -1,0 +1,2 @@
+"""bid-rss-mailer package."""
+

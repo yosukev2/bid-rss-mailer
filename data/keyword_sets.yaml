@@ -1,0 +1,109 @@
+version: 1
+keyword_sets:
+  - id: set-a-it-ops-cloud
+    name: "A: IT運用・保守・クラウド"
+    enabled: true
+    min_required_matches: 2
+    required:
+      - 保守
+      - 運用
+      - 監視
+      - 委託
+      - 役務
+      - システム
+    boost:
+      - クラウド
+      - AWS
+      - Azure
+      - ネットワーク
+      - サーバ
+      - セキュリティ
+      - SOC
+      - EDR
+      - 脆弱性
+      - ログ
+      - バックアップ
+      - DR
+    exclude:
+      - 工事
+      - 建設
+      - 土木
+      - 測量
+      - 清掃
+      - 警備
+      - 印刷
+      - 物品購入
+    exclude_exceptions: []
+    top_n: 10
+  - id: set-b-survey-gis
+    name: "B: 測量・GIS・地理情報"
+    enabled: true
+    min_required_matches: 2
+    required:
+      - 測量
+      - 地理情報
+      - GIS
+      - 地形
+      - 基準点
+      - 点群
+      - 写真測量
+      - 空中写真
+      - 地図
+      - 電子国土
+    boost:
+      - GNSS
+      - RTK
+      - 三次元
+      - LiDAR
+      - オルソ
+      - DEM
+      - DTM
+      - 図化
+      - 台帳
+      - 地籍
+      - UAV
+      - ドローン
+    exclude:
+      - 警備
+      - 清掃
+      - 給食
+      - 印刷
+      - 物品購入
+      - 建設工事
+    exclude_exceptions: []
+    top_n: 10
+  - id: set-c-research-study
+    name: "C: 研究委託・調査・実証"
+    enabled: true
+    min_required_matches: 2
+    required:
+      - 調査
+      - 研究
+      - 委託
+      - 実証
+      - 検討
+      - 評価
+      - 分析
+      - アンケート
+      - ヒアリング
+      - モデル事業
+    boost:
+      - 実験
+      - PoC
+      - 概念実証
+      - データ分析
+      - 統計
+      - 報告書
+      - 有識者
+      - ワークショップ
+      - 基礎調査
+      - 実態調査
+      - 解析
+    exclude:
+      - 工事
+      - 物品購入
+      - 清掃
+      - 警備
+      - 印刷
+    exclude_exceptions: []
+    top_n: 10
