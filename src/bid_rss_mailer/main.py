@@ -13,6 +13,7 @@ from bid_rss_mailer.config import ConfigError, load_keyword_sets_config, load_so
 from bid_rss_mailer.mailer import JST, SmtpConfig, build_failure_body, build_failure_subject, send_text_email
 from bid_rss_mailer.pipeline import run_pipeline
 from bid_rss_mailer.storage import SQLiteStore
+from bid_rss_mailer.x_draft import generate_x_draft
 
 LOGGER = logging.getLogger("bid_rss_mailer")
 
@@ -160,6 +161,40 @@ def run_job(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_x_draft_command(args: argparse.Namespace) -> int:
+    settings = load_runtime_settings(
+        db_path_override=args.db_path,
+        require_smtp=False,
+    )
+    lp_url = (args.lp_url or os.getenv("LP_PUBLIC_URL") or os.getenv("APP_BASE_URL") or "").strip()
+    if not lp_url:
+        raise ConfigError("LP_PUBLIC_URL (or APP_BASE_URL / --lp-url) is required for x-draft")
+
+    output_dir = Path(args.output_dir)
+    store = SQLiteStore(settings.db_path)
+    try:
+        store.initialize()
+        result = generate_x_draft(
+            store=store,
+            output_dir=output_dir,
+            lp_url=lp_url,
+            top_n=args.top_n,
+            force=args.force,
+        )
+    finally:
+        store.close()
+
+    LOGGER.info(
+        "x-draft complete: post_date_jst=%s skipped=%s item_count=%s output=%s",
+        result.post_date_jst,
+        result.skipped,
+        result.item_count,
+        result.output_path,
+    )
+    print(result.output_path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect RSS bids and send email digest.")
     parser.add_argument("--log-level", default="INFO", help="DEBUG/INFO/WARNING/ERROR")
@@ -178,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
     self_test_parser.add_argument("--db-path", default=None)
     self_test_parser.add_argument("--skip-smtp", action="store_true")
     self_test_parser.set_defaults(handler=run_self_test)
+
+    x_draft_parser = subparsers.add_parser(
+        "x-draft",
+        help="Generate X post draft from today's delivered items.",
+    )
+    x_draft_parser.add_argument("--db-path", default=None)
+    x_draft_parser.add_argument("--output-dir", default="out/x-drafts")
+    x_draft_parser.add_argument("--top-n", type=int, default=5)
+    x_draft_parser.add_argument("--lp-url", default=None)
+    x_draft_parser.add_argument("--force", action="store_true")
+    x_draft_parser.set_defaults(handler=run_x_draft_command)
 
     return parser
 

@@ -117,3 +117,23 @@ def test_purge_older_than_removes_old_rows(tmp_path) -> None:
         assert remaining_deliveries == 1
     finally:
         store.close()
+
+
+def test_record_x_draft_and_has_x_draft_for_date(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(str(db_path))
+    store.initialize()
+    try:
+        assert store.has_x_draft_for_date("2026-02-16") is False
+        store.record_x_draft(
+            post_date_jst="2026-02-16",
+            generated_at="2026-02-16T00:00:00+00:00",
+            top_n=5,
+            item_count=2,
+            lp_url="https://example.com/lp",
+            content="content",
+            overwrite=False,
+        )
+        assert store.has_x_draft_for_date("2026-02-16") is True
+    finally:
+        store.close()
