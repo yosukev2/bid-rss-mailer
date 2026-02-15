@@ -58,6 +58,8 @@ keyword_sets:
 ├─ data/
 │  ├─ sources.yaml
 │  └─ keyword_sets.yaml
+├─ docs/ops/
+│  └─ initial-acquisition.md
 ├─ src/bid_rss_mailer/
 │  ├─ main.py
 │  ├─ pipeline.py
@@ -67,7 +69,8 @@ keyword_sets:
 │  ├─ mailer.py
 │  ├─ config.py
 │  ├─ normalize.py
-│  └─ x_draft.py
+│  ├─ x_draft.py
+│  └─ x_publish.py
 ├─ tests/
 ├─ scripts/
 │  ├─ generate_lp_config.py
@@ -82,7 +85,8 @@ keyword_sets:
    ├─ ci.yml
    ├─ daily-mail.yml
    ├─ lp-verify.yml
-   └─ x-draft.yml
+   ├─ x-draft.yml
+   └─ x-publish.yml
 ```
 
 ## 必要環境
@@ -117,6 +121,9 @@ Copy-Item .env.example .env
 - `LP_PLAN_NAME` (任意。LPの価格表示。既定 `月額1,980円`)
 - `LP_PUBLIC_URL` (X投稿文に入れるLP公開URL)
 - `X_DRAFT_OUTPUT_DIR` (任意。X投稿文の出力先。既定 `out/x-drafts`)
+- `X_PUBLISH_MODE` (任意。`manual` / `webhook` / `x_api_v2`。既定 `manual`)
+- `X_WEBHOOK_URL` (`webhook` モード時に必須)
+- `X_API_BEARER_TOKEN` (`x_api_v2` モード時に必須)
 
 PowerShell例:
 ```powershell
@@ -132,6 +139,9 @@ $env:LP_SUPPORT_EMAIL="support@example.com"
 $env:LP_PLAN_NAME="月額1,980円"
 $env:LP_PUBLIC_URL="https://example.com/lp"
 $env:X_DRAFT_OUTPUT_DIR="out/x-drafts"
+$env:X_PUBLISH_MODE="manual"
+$env:X_WEBHOOK_URL=""
+$env:X_API_BEARER_TOKEN=""
 ```
 
 ## 実行コマンド
@@ -173,6 +183,20 @@ $env:PYTHONPATH="src"
 python -m bid_rss_mailer.main x-draft --top-n 5 --force
 ```
 
+X投稿実行（Phase2。mode切替）:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main x-publish --mode manual
+```
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main x-publish --mode webhook
+```
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main x-publish --mode x_api_v2
+```
+
 ## LP（Issue4）
 ローカルでLPを確認:
 ```powershell
@@ -202,6 +226,7 @@ pytest -q
   - `workflow_dispatch` で `dry_run` と `mock_smtp` を選択可
 - `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
 - `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
+- `x-publish.yml`: X投稿実行（Phase2）+ artifact保存（`workflow_dispatch`対応）
 
 必要なSecrets:
 - `ADMIN_EMAIL`
@@ -239,6 +264,21 @@ GitHub Pagesで公開する場合:
 1. X APIアプリ作成・権限付与
 2. 投稿用トークン発行とGitHub Secrets登録
 3. 自動投稿ワークフローへ接続（Issue6で実装）
+
+## X導線 Phase2（投稿実行）
+- `x-publish` は mode を切り替えて実行します。
+  - `manual`: 外部投稿せず、実行記録のみ作成
+  - `webhook`: `X_WEBHOOK_URL` へ投稿文JSONを送信（Zapier/IFTTT連携向け）
+  - `x_api_v2`: X API `POST /2/tweets` を直接実行（`X_API_BEARER_TOKEN` 必須）
+- 同日重複投稿はDBで抑止されます。再実行は `--force` を使います。
+
+外部要件で詰まる場合の前進手順:
+1. まず `manual` で毎朝の運用を固定
+2. 次に `webhook` 連携で自動化（X API不要）
+3. 最後に `x_api_v2` に切り替える
+
+## 初期獲得オペ
+- 手順書: `docs/ops/initial-acquisition.md`
 
 ## 運用上の注意
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。
