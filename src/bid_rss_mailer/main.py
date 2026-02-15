@@ -132,12 +132,16 @@ def run_job(args: argparse.Namespace) -> int:
         result.digest_sent,
         args.dry_run,
     )
-    if result.failures and not args.dry_run and settings.smtp_config is not None:
+    should_warn = bool(result.failures) or result.fetched_count == 0
+    if should_warn and not args.dry_run and settings.smtp_config is not None:
         try:
             now_jst = datetime.now(timezone.utc).astimezone(JST)
+            headline = "RSS取得失敗ソースが発生しました。"
+            if result.fetched_count == 0:
+                headline = "取得結果が0件です（全ソース失敗または全件欠損の可能性）。"
             message = "\n".join(
                 [
-                    "RSS取得失敗ソースが発生しました。",
+                    headline,
                     "",
                     *[
                         f"- {failure.source_id} ({failure.source_url}): {failure.error}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import smtplib
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -81,26 +82,41 @@ def send_text_email(
     to_address: str,
     subject: str,
     body: str,
+    max_attempts: int = 3,
+    retry_wait_sec: float = 1.0,
 ) -> None:
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+
     message = EmailMessage()
     message["From"] = smtp_config.from_address
     message["To"] = to_address
     message["Subject"] = subject
     message.set_content(body)
 
-    if smtp_config.use_ssl:
-        with smtplib.SMTP_SSL(smtp_config.host, smtp_config.port, timeout=30) as smtp:
-            if smtp_config.user:
-                smtp.login(smtp_config.user, smtp_config.password)
-            smtp.send_message(message)
-        return
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if smtp_config.use_ssl:
+                with smtplib.SMTP_SSL(smtp_config.host, smtp_config.port, timeout=30) as smtp:
+                    if smtp_config.user:
+                        smtp.login(smtp_config.user, smtp_config.password)
+                    smtp.send_message(message)
+                return
 
-    with smtplib.SMTP(smtp_config.host, smtp_config.port, timeout=30) as smtp:
-        smtp.ehlo()
-        if smtp_config.starttls:
-            smtp.starttls()
-            smtp.ehlo()
-        if smtp_config.user:
-            smtp.login(smtp_config.user, smtp_config.password)
-        smtp.send_message(message)
-
+            with smtplib.SMTP(smtp_config.host, smtp_config.port, timeout=30) as smtp:
+                smtp.ehlo()
+                if smtp_config.starttls:
+                    smtp.starttls()
+                    smtp.ehlo()
+                if smtp_config.user:
+                    smtp.login(smtp_config.user, smtp_config.password)
+                smtp.send_message(message)
+            return
+        except (OSError, smtplib.SMTPException) as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            time.sleep(retry_wait_sec)
+    if last_error is not None:
+        raise last_error
