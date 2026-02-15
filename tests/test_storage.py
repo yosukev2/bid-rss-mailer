@@ -157,3 +157,31 @@ def test_record_x_post_and_has_x_post_for_date(tmp_path) -> None:
         assert store.has_x_post_for_date("2026-02-16") is True
     finally:
         store.close()
+
+
+def test_upsert_subscriber_is_idempotent(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(str(db_path))
+    store.initialize()
+    try:
+        store.upsert_subscriber(
+            email="User@example.com",
+            email_norm="user@example.com",
+            status="active",
+            plan="manual",
+            keyword_sets='["all"]',
+            now_iso="2026-02-16T00:00:00+00:00",
+        )
+        store.upsert_subscriber(
+            email="user@example.com",
+            email_norm="user@example.com",
+            status="active",
+            plan="manual",
+            keyword_sets='["all"]',
+            now_iso="2026-02-16T00:01:00+00:00",
+        )
+        rows = store.list_subscribers()
+        assert len(rows) == 1
+        assert rows[0]["email_norm"] == "user@example.com"
+    finally:
+        store.close()
