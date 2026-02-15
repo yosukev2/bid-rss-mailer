@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS x_posts (
     response_id TEXT NULL,
     response_body TEXT NULL
 );
+
+CREATE TABLE IF NOT EXISTS subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    email_norm TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    keyword_sets TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -296,3 +307,79 @@ class SQLiteStore:
                 sql,
                 (post_date_jst, posted_at, mode, status, response_id, response_body),
             )
+
+    def upsert_subscriber(
+        self,
+        *,
+        email: str,
+        email_norm: str,
+        status: str,
+        plan: str,
+        keyword_sets: str,
+        now_iso: str,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO subscribers (
+                    email, email_norm, status, plan, keyword_sets, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(email_norm) DO UPDATE SET
+                    email = excluded.email,
+                    status = excluded.status,
+                    plan = excluded.plan,
+                    keyword_sets = excluded.keyword_sets,
+                    updated_at = excluded.updated_at
+                """,
+                (email, email_norm, status, plan, keyword_sets, now_iso, now_iso),
+            )
+
+    def update_subscriber_status(
+        self,
+        *,
+        email_norm: str,
+        status: str,
+        now_iso: str,
+    ) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE subscribers
+                SET status = ?, updated_at = ?
+                WHERE email_norm = ?
+                """,
+                (status, now_iso, email_norm),
+            )
+        return cursor.rowcount > 0
+
+    def list_subscribers(self, status: str | None = None) -> list[sqlite3.Row]:
+        if status is None:
+            rows = self.connection.execute(
+                """
+                SELECT id, email, email_norm, status, plan, keyword_sets, created_at, updated_at
+                FROM subscribers
+                ORDER BY email_norm ASC
+                """
+            ).fetchall()
+            return rows
+        rows = self.connection.execute(
+            """
+            SELECT id, email, email_norm, status, plan, keyword_sets, created_at, updated_at
+            FROM subscribers
+            WHERE status = ?
+            ORDER BY email_norm ASC
+            """,
+            (status,),
+        ).fetchall()
+        return rows
+
+    def active_subscriber_emails(self) -> list[str]:
+        rows = self.connection.execute(
+            """
+            SELECT email
+            FROM subscribers
+            WHERE status = 'active'
+            ORDER BY email_norm ASC
+            """
+        ).fetchall()
+        return [str(row["email"]) for row in rows]

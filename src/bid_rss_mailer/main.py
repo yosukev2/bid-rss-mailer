@@ -13,6 +13,14 @@ from bid_rss_mailer.config import ConfigError, load_keyword_sets_config, load_so
 from bid_rss_mailer.mailer import JST, SmtpConfig, build_failure_body, build_failure_subject, send_text_email
 from bid_rss_mailer.pipeline import run_pipeline
 from bid_rss_mailer.storage import SQLiteStore
+from bid_rss_mailer.subscribers import (
+    ALLOWED_SUBSCRIBER_STATUS,
+    build_subscriber_input,
+    keyword_sets_from_json,
+    keyword_sets_to_json,
+    validate_email,
+    validate_status,
+)
 from bid_rss_mailer.x_draft import generate_x_draft
 from bid_rss_mailer.x_publish import (
     MODE_MANUAL,
@@ -36,6 +44,10 @@ def _parse_bool_env(key: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_db_path(db_path_override: str | None) -> str:
+    return (db_path_override or os.getenv("DB_PATH") or "data/app.db").strip()
 
 
 def load_runtime_settings(db_path_override: str | None, require_smtp: bool) -> RuntimeSettings:
@@ -234,6 +246,88 @@ def run_x_publish_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_subscriber_add_command(args: argparse.Namespace) -> int:
+    subscriber = build_subscriber_input(
+        email=args.email,
+        status=args.status,
+        plan=args.plan,
+        keyword_sets=args.keyword_sets,
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    store = SQLiteStore(_resolve_db_path(args.db_path))
+    try:
+        store.initialize()
+        store.upsert_subscriber(
+            email=subscriber.email,
+            email_norm=subscriber.email_norm,
+            status=subscriber.status,
+            plan=subscriber.plan,
+            keyword_sets=keyword_sets_to_json(subscriber.keyword_sets),
+            now_iso=now_iso,
+        )
+    finally:
+        store.close()
+    print(f"subscriber upserted: {subscriber.email_norm} status={subscriber.status}")
+    return 0
+
+
+def run_subscriber_stop_command(args: argparse.Namespace) -> int:
+    email_norm = validate_email(args.email)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    store = SQLiteStore(_resolve_db_path(args.db_path))
+    try:
+        store.initialize()
+        updated = store.update_subscriber_status(
+            email_norm=email_norm,
+            status="stopped",
+            now_iso=now_iso,
+        )
+    finally:
+        store.close()
+    if not updated:
+        raise ConfigError(f"subscriber not found: {email_norm}")
+    print(f"subscriber stopped: {email_norm}")
+    return 0
+
+
+def run_subscriber_list_command(args: argparse.Namespace) -> int:
+    status = None
+    if args.status:
+        status = validate_status(args.status)
+    store = SQLiteStore(_resolve_db_path(args.db_path))
+    try:
+        store.initialize()
+        rows = store.list_subscribers(status=status)
+    finally:
+        store.close()
+
+    if args.json:
+        payload = [
+            {
+                "email": row["email"],
+                "status": row["status"],
+                "plan": row["plan"],
+                "keyword_sets": list(keyword_sets_from_json(str(row["keyword_sets"]))),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+        import json
+
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    print("email\tstatus\tplan\tkeyword_sets\tupdated_at")
+    for row in rows:
+        keyword_sets = ",".join(keyword_sets_from_json(str(row["keyword_sets"])))
+        print(
+            f"{row['email']}\t{row['status']}\t{row['plan']}\t{keyword_sets}\t{row['updated_at']}"
+        )
+    print(f"count={len(rows)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect RSS bids and send email digest.")
     parser.add_argument("--log-level", default="INFO", help="DEBUG/INFO/WARNING/ERROR")
@@ -278,6 +372,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     x_publish_parser.add_argument("--force", action="store_true")
     x_publish_parser.set_defaults(handler=run_x_publish_command)
+
+    subscriber_add_parser = subparsers.add_parser(
+        "subscriber-add",
+        help="Add or update subscriber (idempotent by email).",
+    )
+    subscriber_add_parser.add_argument("--db-path", default=None)
+    subscriber_add_parser.add_argument("--email", required=True)
+    subscriber_add_parser.add_argument("--status", default="active", choices=tuple(ALLOWED_SUBSCRIBER_STATUS))
+    subscriber_add_parser.add_argument("--plan", default="manual")
+    subscriber_add_parser.add_argument("--keyword-sets", default="all")
+    subscriber_add_parser.set_defaults(handler=run_subscriber_add_command)
+
+    subscriber_stop_parser = subparsers.add_parser(
+        "subscriber-stop",
+        help="Stop subscriber by email.",
+    )
+    subscriber_stop_parser.add_argument("--db-path", default=None)
+    subscriber_stop_parser.add_argument("--email", required=True)
+    subscriber_stop_parser.set_defaults(handler=run_subscriber_stop_command)
+
+    subscriber_list_parser = subparsers.add_parser(
+        "subscriber-list",
+        help="List subscribers.",
+    )
+    subscriber_list_parser.add_argument("--db-path", default=None)
+    subscriber_list_parser.add_argument("--status", default=None, choices=tuple(ALLOWED_SUBSCRIBER_STATUS))
+    subscriber_list_parser.add_argument("--json", action="store_true")
+    subscriber_list_parser.set_defaults(handler=run_subscriber_list_command)
 
     return parser
 
