@@ -1,6 +1,9 @@
 name: daily-bid-rss-mail
 
 on:
+  push:
+    branches:
+      - "feat/**"
   schedule:
     - cron: "0 22 * * *" # UTC 22:00 = JST 07:00
   workflow_dispatch:
@@ -106,4 +109,3 @@ jobs:
           if [[ -f smtp.log ]]; then
             tail -n 200 smtp.log
           fi
-
