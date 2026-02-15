@@ -137,3 +137,23 @@ def test_record_x_draft_and_has_x_draft_for_date(tmp_path) -> None:
         assert store.has_x_draft_for_date("2026-02-16") is True
     finally:
         store.close()
+
+
+def test_record_x_post_and_has_x_post_for_date(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(str(db_path))
+    store.initialize()
+    try:
+        assert store.has_x_post_for_date("2026-02-16") is False
+        store.record_x_post(
+            post_date_jst="2026-02-16",
+            posted_at="2026-02-16T01:00:00+00:00",
+            mode="manual",
+            status="manual_ready",
+            response_id=None,
+            response_body="ok",
+            overwrite=False,
+        )
+        assert store.has_x_post_for_date("2026-02-16") is True
+    finally:
+        store.close()
