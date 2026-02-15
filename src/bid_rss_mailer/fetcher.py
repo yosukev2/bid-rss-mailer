@@ -84,13 +84,14 @@ def fetch_source(session: requests.Session, source: SourceConfig) -> tuple[list[
                     continue
                 description = (entry.get("summary") or entry.get("description") or "").strip()
                 deadline_at = extract_deadline(f"{title} {description}")
+                published_at = _parse_published(entry) or fetched_at
                 items.append(
                     FeedItem(
                         source_id=source.id,
                         organization=source.organization,
                         title=title,
                         url=url,
-                        published_at=_parse_published(entry),
+                        published_at=published_at,
                         fetched_at=fetched_at,
                         description=description,
                         deadline_at=deadline_at,

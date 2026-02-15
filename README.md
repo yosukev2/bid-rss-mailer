@@ -12,6 +12,46 @@
 - メールは1通に集約してセット別に上位10件を送信
 - 失敗/異常時は管理者へ通知
 
+## スキーマ（設定ファイル）
+`data/sources.yaml`
+```yaml
+version: 1
+sources:
+  - id: gsi-nyusatu-1
+    name: 国土地理院 入札公告1
+    organization: 国土地理院
+    url: https://www.gsi.go.jp/nyusatu1.rdf
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+```
+
+検証ルール:
+- `id/name/organization/url` 必須
+- `url` は `http://` または `https://`
+- `id` 重複禁止
+- **正規化後URL** 重複禁止
+
+`data/keyword_sets.yaml`
+```yaml
+version: 1
+keyword_sets:
+  - id: set-a-it-ops-cloud
+    name: "A: IT運用・保守・クラウド"
+    enabled: true
+    min_required_matches: 2
+    required: [保守, 運用, 監視, 委託, 役務, システム]
+    boost: [クラウド, AWS, Azure]
+    exclude: [工事, 建設]
+    exclude_exceptions: []
+    top_n: 10
+```
+
+検証ルール:
+- `id/name/enabled/min_required_matches/required/boost/exclude` 必須
+- `id` 重複禁止
+- `top_n` は整数（既定10）
+
 ## ディレクトリ構成
 ```text
 .
@@ -42,6 +82,11 @@
 python -m venv .venv
 . .venv/Scripts/activate   # Windows PowerShell
 pip install -r requirements.txt
+```
+
+`.env.example` をコピーして環境変数を設定する運用を推奨:
+```powershell
+Copy-Item .env.example .env
 ```
 
 ## 環境変数
@@ -122,4 +167,17 @@ pytest -q
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。
 - RSS取得失敗は実行を継続し、失敗一覧を警告メール通知します。
 - SMTP送信失敗や設定不備は非0終了し、可能な場合は管理者に障害通知メールを送ります。
+- DBは30日保持です。`deliveries` の古いレコードを削除し、参照されない古い `items` も削除します。
 - 本MVPは本文全文保存を行いません。保存対象はタイトル/URL/機関/取得日時/スコア/セット名/締切抽出です。
+
+## 重複URLの扱い
+- URLは正規化してハッシュ化し `items.url_key` で一意管理します。
+- 同一実行内でも同一 `item_id` はセット内で1件に集約します（重複行をメールに出さない）。
+- 再実行時は `deliveries` の `(keyword_set_id, item_id)` で再送を防止します。
+
+## 取得不可RSSの記録
+- 実測で差し替えたRSSの記録: `https://github.com/yosukev2/bid-rss-mailer/issues/1#issuecomment-3903810714`
+
+## 出典方針
+- 出典は各アイテムのURLリンクを参照し、本文全文は保存しません。
+- メール本文にはタイトル/URL/機関/日付/スコアのみを記載します。

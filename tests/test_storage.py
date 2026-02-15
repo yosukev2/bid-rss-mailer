@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bid_rss_mailer.domain import FeedItem, ScoredItem, StoredScoredItem
 from bid_rss_mailer.storage import SQLiteStore
@@ -53,3 +53,67 @@ def test_record_deliveries_blocks_resend(tmp_path) -> None:
     finally:
         store.close()
 
+
+def test_purge_older_than_removes_old_rows(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(str(db_path))
+    store.initialize()
+    now = datetime(2026, 2, 15, tzinfo=timezone.utc)
+    old = now - timedelta(days=40)
+    try:
+        old_item = FeedItem(
+            source_id="source-1",
+            organization="Org",
+            title="old",
+            url="https://example.com/old",
+            published_at=old,
+            fetched_at=old,
+            description="",
+            deadline_at=None,
+        )
+        new_item = FeedItem(
+            source_id="source-1",
+            organization="Org",
+            title="new",
+            url="https://example.com/new",
+            published_at=now,
+            fetched_at=now,
+            description="",
+            deadline_at=None,
+        )
+        old_id = store.upsert_item(old_item)
+        new_id = store.upsert_item(new_item)
+
+        old_record = StoredScoredItem(
+            item_id=old_id,
+            scored_item=ScoredItem(
+                keyword_set_id="set-a",
+                keyword_set_name="A",
+                item=old_item,
+                score=10,
+                required_matches=("運用", "保守"),
+                boost_matches=(),
+            ),
+        )
+        new_record = StoredScoredItem(
+            item_id=new_id,
+            scored_item=ScoredItem(
+                keyword_set_id="set-a",
+                keyword_set_name="A",
+                item=new_item,
+                score=10,
+                required_matches=("運用", "保守"),
+                boost_matches=(),
+            ),
+        )
+        store.record_deliveries("run-old", "set-a", [old_record], delivered_at=old)
+        store.record_deliveries("run-new", "set-a", [new_record], delivered_at=now)
+
+        store.purge_older_than(days=30, now=now)
+
+        remaining_items = store.connection.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"]
+        remaining_deliveries = store.connection.execute("SELECT COUNT(*) AS c FROM deliveries").fetchone()["c"]
+        assert remaining_items == 1
+        assert remaining_deliveries == 1
+    finally:
+        store.close()

@@ -56,7 +56,15 @@ def _filter_new_records(
         item_ids=[record.item_id for record in stored],
     )
     new_records = [record for record in stored if record.item_id not in delivered_ids]
-    return new_records[: keyword_set.top_n]
+
+    deduped_records: list[StoredScoredItem] = []
+    seen_item_ids: set[int] = set()
+    for record in new_records:
+        if record.item_id in seen_item_ids:
+            continue
+        seen_item_ids.add(record.item_id)
+        deduped_records.append(record)
+    return deduped_records[: keyword_set.top_n]
 
 
 def run_pipeline(
@@ -100,6 +108,7 @@ def run_pipeline(
 
         digest_sent = False
         if dry_run:
+            store.purge_older_than(days=30)
             return PipelineResult(
                 run_id=run_id,
                 fetched_count=len(items),
@@ -127,6 +136,7 @@ def run_pipeline(
                 records=records,
                 delivered_at=delivered_at,
             )
+        store.purge_older_than(days=30)
 
         return PipelineResult(
             run_id=run_id,

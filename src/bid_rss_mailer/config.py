@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from bid_rss_mailer.normalize import normalize_url
+
 
 class ConfigError(ValueError):
     """Raised when YAML config is invalid."""
@@ -98,6 +100,7 @@ def load_sources_config(path: str | Path) -> list[SourceConfig]:
         raise ConfigError("sources must be a non-empty list")
 
     seen_ids: set[str] = set()
+    seen_urls: set[str] = set()
     parsed: list[SourceConfig] = []
     for index, raw in enumerate(sources):
         node_path = f"sources[{index}]"
@@ -110,6 +113,10 @@ def load_sources_config(path: str | Path) -> list[SourceConfig]:
         url = _require_str(raw, "url", node_path)
         if not (url.startswith("http://") or url.startswith("https://")):
             raise ConfigError(f"{node_path}.url must start with http:// or https://")
+        normalized_url = normalize_url(url)
+        if normalized_url in seen_urls:
+            raise ConfigError(f"Duplicate source url after normalization: {url}")
+        seen_urls.add(normalized_url)
         parsed.append(
             SourceConfig(
                 id=source_id,
@@ -155,4 +162,3 @@ def load_keyword_sets_config(path: str | Path) -> list[KeywordSetConfig]:
             )
         )
     return parsed
-

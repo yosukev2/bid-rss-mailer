@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -47,6 +47,25 @@ class SQLiteStore:
     def initialize(self) -> None:
         with self.connection:
             self.connection.executescript(SCHEMA_SQL)
+
+    def purge_older_than(self, *, days: int, now: datetime | None = None) -> None:
+        if days <= 0:
+            raise ValueError("days must be > 0")
+        current = now or datetime.now(timezone.utc)
+        cutoff = (current - timedelta(days=days)).isoformat()
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM deliveries WHERE delivered_at < ?",
+                (cutoff,),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM items
+                WHERE fetched_at < ?
+                AND id NOT IN (SELECT item_id FROM deliveries)
+                """,
+                (cutoff,),
+            )
 
     def upsert_item(self, item: FeedItem) -> int:
         published_text = item.published_at.isoformat() if item.published_at else None
@@ -142,4 +161,3 @@ class SQLiteStore:
                     for record in records
                 ],
             )
-
