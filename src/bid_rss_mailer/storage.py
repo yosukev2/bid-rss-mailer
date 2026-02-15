@@ -31,6 +31,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
     UNIQUE(keyword_set_id, item_id),
     FOREIGN KEY(item_id) REFERENCES items(id)
 );
+
+CREATE TABLE IF NOT EXISTS x_drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_date_jst TEXT NOT NULL UNIQUE,
+    generated_at TEXT NOT NULL,
+    top_n INTEGER NOT NULL,
+    item_count INTEGER NOT NULL,
+    lp_url TEXT NOT NULL,
+    content TEXT NOT NULL
+);
 """
 
 
@@ -161,3 +171,76 @@ class SQLiteStore:
                     for record in records
                 ],
             )
+
+    def has_x_draft_for_date(self, post_date_jst: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM x_drafts WHERE post_date_jst = ?",
+            (post_date_jst,),
+        ).fetchone()
+        return row is not None
+
+    def record_x_draft(
+        self,
+        *,
+        post_date_jst: str,
+        generated_at: str,
+        top_n: int,
+        item_count: int,
+        lp_url: str,
+        content: str,
+        overwrite: bool = False,
+    ) -> None:
+        if overwrite:
+            sql = """
+                INSERT INTO x_drafts (
+                    post_date_jst, generated_at, top_n, item_count, lp_url, content
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(post_date_jst) DO UPDATE SET
+                    generated_at = excluded.generated_at,
+                    top_n = excluded.top_n,
+                    item_count = excluded.item_count,
+                    lp_url = excluded.lp_url,
+                    content = excluded.content
+            """
+        else:
+            sql = """
+                INSERT INTO x_drafts (
+                    post_date_jst, generated_at, top_n, item_count, lp_url, content
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """
+        with self.connection:
+            self.connection.execute(
+                sql,
+                (post_date_jst, generated_at, top_n, item_count, lp_url, content),
+            )
+
+    def top_delivered_items(
+        self,
+        *,
+        delivered_at_from: str,
+        delivered_at_to: str,
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        if limit <= 0:
+            raise ValueError("limit must be > 0")
+        rows = self.connection.execute(
+            """
+            SELECT
+                i.id AS item_id,
+                i.title AS title,
+                i.organization AS organization,
+                i.url AS url,
+                i.published_at AS published_at,
+                i.fetched_at AS fetched_at,
+                MAX(d.score) AS score
+            FROM deliveries d
+            INNER JOIN items i ON i.id = d.item_id
+            WHERE d.delivered_at >= ?
+              AND d.delivered_at < ?
+            GROUP BY i.id, i.title, i.organization, i.url, i.published_at, i.fetched_at
+            ORDER BY score DESC, COALESCE(i.published_at, i.fetched_at) DESC, i.id DESC
+            LIMIT ?
+            """,
+            (delivered_at_from, delivered_at_to, limit),
+        ).fetchall()
+        return rows
