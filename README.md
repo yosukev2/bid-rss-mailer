@@ -68,9 +68,19 @@ keyword_sets:
 │  ├─ config.py
 │  └─ normalize.py
 ├─ tests/
+├─ scripts/
+│  ├─ generate_lp_config.py
+│  └─ validate_lp.py
+├─ web/lp/
+│  ├─ index.html
+│  ├─ styles.css
+│  ├─ app.js
+│  ├─ config.js
+│  └─ free_today.json
 └─ .github/workflows/
    ├─ ci.yml
-   └─ daily-mail.yml
+   ├─ daily-mail.yml
+   └─ lp-verify.yml
 ```
 
 ## 必要環境
@@ -100,6 +110,9 @@ Copy-Item .env.example .env
 - `APP_BASE_URL` (任意・将来拡張)
 - `SMTP_STARTTLS` (任意。既定 `true`)
 - `SMTP_USE_SSL` (任意。既定 `SMTP_PORT=465` 時 true)
+- `LP_CHECKOUT_URL` (任意。LPの購入導線URL。未設定時は「準備中」表示)
+- `LP_SUPPORT_EMAIL` (任意。LPの問い合わせ先。既定 `support@example.com`)
+- `LP_PLAN_NAME` (任意。LPの価格表示。既定 `月額1,980円`)
 
 PowerShell例:
 ```powershell
@@ -110,6 +123,9 @@ $env:SMTP_USER="mailer-user"
 $env:SMTP_PASS="mailer-pass"
 $env:SMTP_FROM="bid-rss-mailer@example.com"
 $env:DB_PATH="data/app.db"
+$env:LP_CHECKOUT_URL="https://checkout.stripe.com/c/pay/..."
+$env:LP_SUPPORT_EMAIL="support@example.com"
+$env:LP_PLAN_NAME="月額1,980円"
 ```
 
 ## 実行コマンド
@@ -140,6 +156,19 @@ $env:PYTHONPATH="src"
 python -m bid_rss_mailer.main run
 ```
 
+## LP（Issue4）
+ローカルでLPを確認:
+```powershell
+python scripts/generate_lp_config.py --output web/lp/config.js
+python scripts/validate_lp.py
+python -m http.server 8080 --directory web/lp
+```
+
+ブラウザで `http://127.0.0.1:8080` を開き、以下を確認:
+- 無料枠/有料枠/免責/購入導線が表示される
+- `LP_CHECKOUT_URL` 未設定時に「準備中」メッセージが表示される
+- `free_today.json` のタイトル一覧が表示される（本文全文は保持しない）
+
 ## テスト
 ```bash
 PYTHONPATH=src pytest -q
@@ -154,6 +183,7 @@ pytest -q
 - `daily-mail.yml`: 毎日定期実行 + 手動実行
   - cron: `0 22 * * *` (UTC 22:00 = JST 翌日 07:00)
   - `workflow_dispatch` で `dry_run` と `mock_smtp` を選択可
+- `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
 
 必要なSecrets:
 - `ADMIN_EMAIL`
@@ -162,6 +192,20 @@ pytest -q
 - `SMTP_USER`
 - `SMTP_PASS`
 - `SMTP_FROM`
+- `LP_CHECKOUT_URL` (任意。設定した場合のみ購入導線が有効)
+
+## 外部アカウントが必要な手作業（LP公開）
+GitHub Pagesで公開する場合:
+1. Repository Settings → Pages を開く
+2. Source を `GitHub Actions` に設定
+3. `lp-verify.yml` 実行で生成された `web/lp` を公開対象にするワークフローを追加（またはVercel等で `web/lp` を静的配信）
+4. 公開URLを `APP_BASE_URL` に設定
+5. Stripe Checkout URL作成後に `LP_CHECKOUT_URL` をSecretsに設定
+
+チェック方法:
+1. 公開URLでLP表示を確認
+2. 「有料プランを開始する」リンクがCheckoutに遷移することを確認
+3. 免責・無料枠・問い合わせ先が表示されることを確認
 
 ## 運用上の注意
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。
