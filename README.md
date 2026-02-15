@@ -66,7 +66,8 @@ keyword_sets:
 │  ├─ storage.py
 │  ├─ mailer.py
 │  ├─ config.py
-│  └─ normalize.py
+│  ├─ normalize.py
+│  └─ x_draft.py
 ├─ tests/
 ├─ scripts/
 │  ├─ generate_lp_config.py
@@ -80,7 +81,8 @@ keyword_sets:
 └─ .github/workflows/
    ├─ ci.yml
    ├─ daily-mail.yml
-   └─ lp-verify.yml
+   ├─ lp-verify.yml
+   └─ x-draft.yml
 ```
 
 ## 必要環境
@@ -113,6 +115,8 @@ Copy-Item .env.example .env
 - `LP_CHECKOUT_URL` (任意。LPの購入導線URL。未設定時は「準備中」表示)
 - `LP_SUPPORT_EMAIL` (任意。LPの問い合わせ先。既定 `support@example.com`)
 - `LP_PLAN_NAME` (任意。LPの価格表示。既定 `月額1,980円`)
+- `LP_PUBLIC_URL` (X投稿文に入れるLP公開URL)
+- `X_DRAFT_OUTPUT_DIR` (任意。X投稿文の出力先。既定 `out/x-drafts`)
 
 PowerShell例:
 ```powershell
@@ -126,6 +130,8 @@ $env:DB_PATH="data/app.db"
 $env:LP_CHECKOUT_URL="https://checkout.stripe.com/c/pay/..."
 $env:LP_SUPPORT_EMAIL="support@example.com"
 $env:LP_PLAN_NAME="月額1,980円"
+$env:LP_PUBLIC_URL="https://example.com/lp"
+$env:X_DRAFT_OUTPUT_DIR="out/x-drafts"
 ```
 
 ## 実行コマンド
@@ -156,6 +162,17 @@ $env:PYTHONPATH="src"
 python -m bid_rss_mailer.main run
 ```
 
+X投稿文下書き生成（Phase1。投稿API連携なし）:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main x-draft --top-n 5
+```
+同日再生成を許可する場合:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main x-draft --top-n 5 --force
+```
+
 ## LP（Issue4）
 ローカルでLPを確認:
 ```powershell
@@ -184,6 +201,7 @@ pytest -q
   - cron: `0 22 * * *` (UTC 22:00 = JST 翌日 07:00)
   - `workflow_dispatch` で `dry_run` と `mock_smtp` を選択可
 - `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
+- `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
 
 必要なSecrets:
 - `ADMIN_EMAIL`
@@ -206,6 +224,21 @@ GitHub Pagesで公開する場合:
 1. 公開URLでLP表示を確認
 2. 「有料プランを開始する」リンクがCheckoutに遷移することを確認
 3. 免責・無料枠・問い合わせ先が表示されることを確認
+
+## X導線 Phase1（投稿文生成のみ）
+- 生成ロジックはテンプレート + 上位N件のルールベースです（要約なし）。
+- 1日1回（JST日付単位）で重複生成を抑止します。再生成する場合のみ `--force` を使います。
+- 出力先は既定で `out/x-drafts/YYYY-MM-DD.txt` です。
+
+運用手順（手動投稿）:
+1. `python -m bid_rss_mailer.main x-draft --top-n 5` を実行
+2. `out/x-drafts/YYYY-MM-DD.txt` の文面を確認
+3. Xへ手動投稿
+
+外部要件（Phase2）:
+1. X APIアプリ作成・権限付与
+2. 投稿用トークン発行とGitHub Secrets登録
+3. 自動投稿ワークフローへ接続（Issue6で実装）
 
 ## 運用上の注意
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。
