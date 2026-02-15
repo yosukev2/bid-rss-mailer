@@ -1,0 +1,121 @@
+version: 1
+sources:
+  - id: gsi-nyusatu-1
+    name: 国土地理院 入札公告1
+    organization: 国土地理院
+    url: https://www.gsi.go.jp/nyusatu1.rdf
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: gsi-nyusatu-2
+    name: 国土地理院 入札公告2
+    organization: 国土地理院
+    url: https://www.gsi.go.jp/nyusatu2.rdf
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: fsa-procurement-1
+    name: 金融庁 調達情報1
+    organization: 金融庁
+    url: https://www.fsa.go.jp/fsaProcurementList_rss2.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: fsa-procurement-2
+    name: 金融庁 調達情報2
+    organization: 金融庁
+    url: https://www.fsa.go.jp/fsaNewsListAll_rss2.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: inpit-kobo
+    name: INPIT 公募
+    organization: INPIT
+    url: http://www.inpit.go.jp/kobo.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-solicitation
+    name: 中小機構 公募・調達
+    organization: 中小機構
+    url: https://www.smrj.go.jp/org/info/solicitation/solicitation.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-procurement-main
+    name: 中小機構 調達・入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/org/info/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-hokkaido
+    name: 中小機構 北海道本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/hokkaido/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-tohoku
+    name: 中小機構 東北本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/tohoku/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-kanto
+    name: 中小機構 関東本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/kanto/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-chubu
+    name: 中小機構 中部本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/chubu/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-hokuriku
+    name: 中小機構 北陸本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/hokuriku/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-kinki
+    name: 中小機構 近畿本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/kinki/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-chugoku
+    name: 中小機構 中国本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/chugoku/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-shikoku
+    name: 中小機構 四国本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/shikoku/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-kyushu
+    name: 中小機構 九州本部 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/kyushu/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2
+  - id: smrj-okinawa
+    name: 中小機構 沖縄事務所 入札
+    organization: 中小機構
+    url: https://www.smrj.go.jp/regional_hq/okinawa/bid/info_bid.xml
+    enabled: true
+    timeout_sec: 20
+    retries: 2

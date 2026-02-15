@@ -1,0 +1,114 @@
+name: daily-bid-rss-mail
+
+on:
+  push:
+    branches:
+      - "feat/**"
+  schedule:
+    - cron: "0 22 * * *" # UTC 22:00 = JST 07:00
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run without sending delivery/failure mail"
+        required: true
+        default: true
+        type: boolean
+      mock_smtp:
+        description: "Use local mock SMTP server (for verification)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  run-daily:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore SQLite cache
+        uses: actions/cache@v4
+        with:
+          path: data/app.db
+          key: bid-rss-mailer-db-${{ github.run_id }}
+          restore-keys: |
+            bid-rss-mailer-db-
+
+      - name: Resolve run mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+            echo "mock_smtp=${{ inputs.mock_smtp }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "mock_smtp=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "mock_smtp=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start mock SMTP server
+        if: steps.mode.outputs.mock_smtp == 'true'
+        shell: bash
+        run: |
+          python -m aiosmtpd -n -l 127.0.0.1:1025 > smtp.log 2>&1 &
+          echo $! > smtp.pid
+          sleep 2
+
+      - name: Run mailer
+        shell: bash
+        env:
+          SECRET_ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          SECRET_SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SECRET_SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SECRET_SMTP_USER: ${{ secrets.SMTP_USER }}
+          SECRET_SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SECRET_SMTP_FROM: ${{ secrets.SMTP_FROM }}
+        run: |
+          set -euo pipefail
+          export DB_PATH="${GITHUB_WORKSPACE}/data/app.db"
+
+          if [[ "${{ steps.mode.outputs.mock_smtp }}" == "true" ]]; then
+            export ADMIN_EMAIL="admin@example.local"
+            export SMTP_HOST="127.0.0.1"
+            export SMTP_PORT="1025"
+            export SMTP_USER=""
+            export SMTP_PASS=""
+            export SMTP_FROM="noreply@example.local"
+            export SMTP_STARTTLS="false"
+          else
+            export ADMIN_EMAIL="${SECRET_ADMIN_EMAIL}"
+            export SMTP_HOST="${SECRET_SMTP_HOST}"
+            export SMTP_PORT="${SECRET_SMTP_PORT}"
+            export SMTP_USER="${SECRET_SMTP_USER}"
+            export SMTP_PASS="${SECRET_SMTP_PASS}"
+            export SMTP_FROM="${SECRET_SMTP_FROM}"
+          fi
+
+          cmd=(python -m bid_rss_mailer.main run --sources data/sources.yaml --keywords data/keyword_sets.yaml --db-path "$DB_PATH")
+          if [[ "${{ steps.mode.outputs.dry_run }}" == "true" ]]; then
+            cmd+=(--dry-run)
+          fi
+          PYTHONPATH=src "${cmd[@]}"
+
+      - name: Show mock SMTP log
+        if: always() && steps.mode.outputs.mock_smtp == 'true'
+        shell: bash
+        run: |
+          if [[ -f smtp.log ]]; then
+            tail -n 200 smtp.log
+          fi
