@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-02-15T00:00:00+09:00",
+  "items": [
+    {
+      "title": "クラウド基盤運用保守業務（試行サンプル）",
+      "url": "https://example.jp/procurement/1",
+      "organization": "サンプル機関A",
+      "date": "2026-02-15"
+    },
+    {
+      "title": "地理情報システムデータ整備委託（試行サンプル）",
+      "url": "https://example.jp/procurement/2",
+      "organization": "サンプル機関B",
+      "date": "2026-02-15"
+    },
+    {
+      "title": "研究調査・分析業務（試行サンプル）",
+      "url": "https://example.jp/procurement/3",
+      "organization": "サンプル機関C",
+      "date": "2026-02-15"
+    }
+  ]
+}

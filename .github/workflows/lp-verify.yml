@@ -1,0 +1,58 @@
+name: lp-verify
+
+on:
+  push:
+    branches:
+      - "feat/**"
+    paths:
+      - "web/lp/**"
+      - "scripts/generate_lp_config.py"
+      - "scripts/validate_lp.py"
+      - ".github/workflows/lp-verify.yml"
+      - "README.md"
+      - ".env.example"
+  workflow_dispatch:
+    inputs:
+      require_checkout_url:
+        description: "Fail when LP_CHECKOUT_URL is empty"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate LP config
+        shell: bash
+        env:
+          LP_CHECKOUT_URL: ${{ secrets.LP_CHECKOUT_URL }}
+          LP_SUPPORT_EMAIL: ${{ vars.LP_SUPPORT_EMAIL }}
+          LP_PLAN_NAME: ${{ vars.LP_PLAN_NAME }}
+        run: |
+          python scripts/generate_lp_config.py --output web/lp/config.js
+
+      - name: Validate LP
+        shell: bash
+        run: |
+          args=(python scripts/validate_lp.py)
+          if [[ "${{ inputs.require_checkout_url }}" == "true" ]]; then
+            args+=(--require-checkout-url)
+          fi
+          "${args[@]}"
+
+      - name: Upload LP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lp-static
+          path: web/lp
