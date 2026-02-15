@@ -41,6 +41,16 @@ CREATE TABLE IF NOT EXISTS x_drafts (
     lp_url TEXT NOT NULL,
     content TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS x_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_date_jst TEXT NOT NULL UNIQUE,
+    posted_at TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    response_id TEXT NULL,
+    response_body TEXT NULL
+);
 """
 
 
@@ -244,3 +254,45 @@ class SQLiteStore:
             (delivered_at_from, delivered_at_to, limit),
         ).fetchall()
         return rows
+
+    def has_x_post_for_date(self, post_date_jst: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM x_posts WHERE post_date_jst = ?",
+            (post_date_jst,),
+        ).fetchone()
+        return row is not None
+
+    def record_x_post(
+        self,
+        *,
+        post_date_jst: str,
+        posted_at: str,
+        mode: str,
+        status: str,
+        response_id: str | None,
+        response_body: str | None,
+        overwrite: bool = False,
+    ) -> None:
+        if overwrite:
+            sql = """
+                INSERT INTO x_posts (
+                    post_date_jst, posted_at, mode, status, response_id, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(post_date_jst) DO UPDATE SET
+                    posted_at = excluded.posted_at,
+                    mode = excluded.mode,
+                    status = excluded.status,
+                    response_id = excluded.response_id,
+                    response_body = excluded.response_body
+            """
+        else:
+            sql = """
+                INSERT INTO x_posts (
+                    post_date_jst, posted_at, mode, status, response_id, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """
+        with self.connection:
+            self.connection.execute(
+                sql,
+                (post_date_jst, posted_at, mode, status, response_id, response_body),
+            )

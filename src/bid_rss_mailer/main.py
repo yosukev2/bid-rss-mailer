@@ -14,6 +14,12 @@ from bid_rss_mailer.mailer import JST, SmtpConfig, build_failure_body, build_fai
 from bid_rss_mailer.pipeline import run_pipeline
 from bid_rss_mailer.storage import SQLiteStore
 from bid_rss_mailer.x_draft import generate_x_draft
+from bid_rss_mailer.x_publish import (
+    MODE_MANUAL,
+    MODE_WEBHOOK,
+    MODE_X_API_V2,
+    publish_x_post,
+)
 
 LOGGER = logging.getLogger("bid_rss_mailer")
 
@@ -195,6 +201,39 @@ def run_x_draft_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_x_publish_command(args: argparse.Namespace) -> int:
+    settings = load_runtime_settings(
+        db_path_override=args.db_path,
+        require_smtp=False,
+    )
+
+    store = SQLiteStore(settings.db_path)
+    try:
+        store.initialize()
+        result = publish_x_post(
+            store=store,
+            draft_dir=Path(args.draft_dir),
+            receipt_dir=Path(args.receipt_dir),
+            mode=args.mode,
+            force=args.force,
+            webhook_url=(os.getenv("X_WEBHOOK_URL") or "").strip(),
+            bearer_token=(os.getenv("X_API_BEARER_TOKEN") or "").strip(),
+        )
+    finally:
+        store.close()
+
+    LOGGER.info(
+        "x-publish complete: post_date_jst=%s mode=%s status=%s skipped=%s receipt=%s",
+        result.post_date_jst,
+        result.mode,
+        result.status,
+        result.skipped,
+        result.receipt_path,
+    )
+    print(result.receipt_path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect RSS bids and send email digest.")
     parser.add_argument("--log-level", default="INFO", help="DEBUG/INFO/WARNING/ERROR")
@@ -224,6 +263,21 @@ def build_parser() -> argparse.ArgumentParser:
     x_draft_parser.add_argument("--lp-url", default=None)
     x_draft_parser.add_argument("--force", action="store_true")
     x_draft_parser.set_defaults(handler=run_x_draft_command)
+
+    x_publish_parser = subparsers.add_parser(
+        "x-publish",
+        help="Publish today's X draft (manual/webhook/x_api_v2).",
+    )
+    x_publish_parser.add_argument("--db-path", default=None)
+    x_publish_parser.add_argument("--draft-dir", default=os.getenv("X_DRAFT_OUTPUT_DIR", "out/x-drafts"))
+    x_publish_parser.add_argument("--receipt-dir", default="out/x-publish")
+    x_publish_parser.add_argument(
+        "--mode",
+        choices=(MODE_MANUAL, MODE_WEBHOOK, MODE_X_API_V2),
+        default=MODE_MANUAL,
+    )
+    x_publish_parser.add_argument("--force", action="store_true")
+    x_publish_parser.set_defaults(handler=run_x_publish_command)
 
     return parser
 
