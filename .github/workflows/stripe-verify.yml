@@ -1,0 +1,142 @@
+name: stripe-verify
+
+on:
+  push:
+    branches:
+      - "feat/**"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify stripe flow in mock mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH=src
+          export DB_PATH="${GITHUB_WORKSPACE}/data/stripe-verify.db"
+          export ADMIN_EMAIL="admin@example.local"
+          export STRIPE_SECRET_KEY="sk_test_dummy"
+          export STRIPE_PRICE_ID="price_test_dummy"
+          export STRIPE_SUCCESS_URL="https://example.com/success"
+          export STRIPE_CANCEL_URL="https://example.com/cancel"
+          export STRIPE_WEBHOOK_SECRET="whsec_test"
+          export STRIPE_DEFAULT_PLAN="stripe-monthly"
+          export STRIPE_DEFAULT_KEYWORD_SETS="all"
+          export STRIPE_MOCK_MODE="true"
+          export STRIPE_VERIFY_SIGNATURE="true"
+
+          python -m bid_rss_mailer.main stripe-checkout-create --db-path "$DB_PATH" --email buyer@example.com --keyword-sets all --plan stripe-monthly > checkout_url.txt
+          CHECKOUT_URL="$(cat checkout_url.txt)"
+          CHECKOUT_URL_MASKED="$(echo "$CHECKOUT_URL" | sed -E 's/cs_test_mock_[a-z0-9]+/cs_test_mock_[MASKED]/')"
+          echo "checkout_url=${CHECKOUT_URL_MASKED}" | tee run.log
+
+          cat > event_checkout.json <<'JSON'
+          {
+            "id": "evt_checkout",
+            "type": "checkout.session.completed",
+            "data": {
+              "object": {
+                "customer": "cus_test_123",
+                "customer_email": "buyer@example.com",
+                "metadata": {
+                  "plan": "stripe-monthly",
+                  "keyword_sets": "all"
+                }
+              }
+            }
+          }
+          JSON
+
+          SIG_CHECKOUT="$(python - <<'PY'
+          from pathlib import Path
+          from bid_rss_mailer.stripe_integration import build_test_signature_header
+          payload = Path('event_checkout.json').read_bytes()
+          print(build_test_signature_header(payload=payload, webhook_secret='whsec_test'))
+          PY
+          )"
+
+          python -m bid_rss_mailer.main stripe-webhook-apply --db-path "$DB_PATH" --payload event_checkout.json --signature "$SIG_CHECKOUT" 2>&1 | tee -a run.log
+          python -m bid_rss_mailer.main subscriber-list --db-path "$DB_PATH" --json > subscribers_after_checkout.json
+          python - <<'PY' | tee -a run.log
+          import json
+          from pathlib import Path
+
+          rows = json.loads(Path('subscribers_after_checkout.json').read_text(encoding='utf-8'))
+          assert len(rows) == 1, rows
+          assert rows[0]['email'] == 'buyer@example.com', rows
+          assert rows[0]['status'] == 'active', rows
+          print('checkout_sync_assertion=ok')
+          PY
+
+          cat > event_payment_failed.json <<'JSON'
+          {
+            "id": "evt_payment_failed",
+            "type": "invoice.payment_failed",
+            "data": {
+              "object": {
+                "customer": "cus_test_123"
+              }
+            }
+          }
+          JSON
+
+          SIG_FAILED="$(python - <<'PY'
+          from pathlib import Path
+          from bid_rss_mailer.stripe_integration import build_test_signature_header
+          payload = Path('event_payment_failed.json').read_bytes()
+          print(build_test_signature_header(payload=payload, webhook_secret='whsec_test'))
+          PY
+          )"
+
+          python -m bid_rss_mailer.main stripe-webhook-apply --db-path "$DB_PATH" --payload event_payment_failed.json --signature "$SIG_FAILED" 2>&1 | tee -a run.log
+          python -m bid_rss_mailer.main subscriber-list --db-path "$DB_PATH" --json > subscribers_after_failed.json
+          python - <<'PY' | tee -a run.log
+          import json
+          from pathlib import Path
+
+          rows = json.loads(Path('subscribers_after_failed.json').read_text(encoding='utf-8'))
+          assert len(rows) == 1, rows
+          assert rows[0]['email'] == 'buyer@example.com', rows
+          assert rows[0]['status'] == 'stopped', rows
+          print('payment_failed_sync_assertion=ok')
+          PY
+
+          set +e
+          python -m bid_rss_mailer.main stripe-webhook-apply --db-path "$DB_PATH" --payload event_checkout.json > missing_signature.log 2>&1
+          STATUS="$?"
+          set -e
+          if [[ "$STATUS" -eq 0 ]]; then
+            echo "missing signature must fail"
+            exit 1
+          fi
+          grep -q "Stripe signature header is required" missing_signature.log
+          echo "missing_signature_assertion=ok" | tee -a run.log
+
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stripe-verify-logs
+          path: |
+            run.log
+            checkout_url.txt
+            subscribers_after_checkout.json
+            subscribers_after_failed.json
+            missing_signature.log

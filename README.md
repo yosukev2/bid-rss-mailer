@@ -70,6 +70,7 @@ keyword_sets:
 │  ├─ config.py
 │  ├─ normalize.py
 │  ├─ subscribers.py
+│  ├─ stripe_integration.py
 │  ├─ x_draft.py
 │  └─ x_publish.py
 ├─ tests/
@@ -87,6 +88,7 @@ keyword_sets:
    ├─ daily-mail.yml
    ├─ delivery-verify.yml
    ├─ lp-verify.yml
+   ├─ stripe-verify.yml
    ├─ subscribers-verify.yml
    ├─ x-draft.yml
    └─ x-publish.yml
@@ -122,6 +124,15 @@ Copy-Item .env.example .env
 - `LP_CHECKOUT_URL` (任意。LPの購入導線URL。未設定時は「準備中」表示)
 - `LP_SUPPORT_EMAIL` (任意。LPの問い合わせ先。既定 `support@example.com`)
 - `LP_PLAN_NAME` (任意。LPの価格表示。既定 `月額1,980円`)
+- `STRIPE_SECRET_KEY` (`stripe-checkout-create` 実行時に必須)
+- `STRIPE_PRICE_ID` (月額Price ID)
+- `STRIPE_SUCCESS_URL` (Checkout成功後の遷移先)
+- `STRIPE_CANCEL_URL` (Checkout中断時の遷移先)
+- `STRIPE_WEBHOOK_SECRET` (`stripe-webhook-apply` 署名検証で必須)
+- `STRIPE_DEFAULT_PLAN` (任意。既定 `stripe-monthly`)
+- `STRIPE_DEFAULT_KEYWORD_SETS` (任意。既定 `all`)
+- `STRIPE_VERIFY_SIGNATURE` (任意。既定 `true`)
+- `STRIPE_MOCK_MODE` (任意。既定 `false`。`true`で外部通信なし検証)
 - `LP_PUBLIC_URL` (X投稿文に入れるLP公開URL)
 - `X_DRAFT_OUTPUT_DIR` (任意。X投稿文の出力先。既定 `out/x-drafts`)
 - `X_PUBLISH_MODE` (任意。`manual` / `webhook` / `x_api_v2`。既定 `manual`)
@@ -143,6 +154,15 @@ $env:DB_PATH="data/app.db"
 $env:LP_CHECKOUT_URL="https://checkout.stripe.com/c/pay/..."
 $env:LP_SUPPORT_EMAIL="support@example.com"
 $env:LP_PLAN_NAME="月額1,980円"
+$env:STRIPE_SECRET_KEY="sk_test_xxx"
+$env:STRIPE_PRICE_ID="price_xxx"
+$env:STRIPE_SUCCESS_URL="https://example.com/stripe/success"
+$env:STRIPE_CANCEL_URL="https://example.com/stripe/cancel"
+$env:STRIPE_WEBHOOK_SECRET="whsec_xxx"
+$env:STRIPE_DEFAULT_PLAN="stripe-monthly"
+$env:STRIPE_DEFAULT_KEYWORD_SETS="all"
+$env:STRIPE_VERIFY_SIGNATURE="true"
+$env:STRIPE_MOCK_MODE="false"
 $env:LP_PUBLIC_URL="https://example.com/lp"
 $env:X_DRAFT_OUTPUT_DIR="out/x-drafts"
 $env:X_PUBLISH_MODE="manual"
@@ -214,6 +234,18 @@ python -m bid_rss_mailer.main subscriber-stop --email user1@example.com
 python -m bid_rss_mailer.main subscriber-list --json
 ```
 
+Stripe Checkout URL生成（test mode可）:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main stripe-checkout-create --email buyer@example.com --keyword-sets all --plan stripe-monthly
+```
+
+Stripe Webhook反映（署名検証あり）:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main stripe-webhook-apply --db-path data/app.db --payload .\event_checkout.json --signature "t=...,v1=..."
+```
+
 ## LP（Issue4）
 ローカルでLPを確認:
 ```powershell
@@ -244,6 +276,7 @@ pytest -q
 - `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
 - `subscribers-verify.yml`: subscriber DB/CLIの検証（`workflow_dispatch`対応）
 - `delivery-verify.yml`: active購読者配信 + 件数上限 + admin copy挙動の検証（`workflow_dispatch`対応）
+- `stripe-verify.yml`: Checkout作成(mock) + Webhook同期の検証（`workflow_dispatch`対応）
 - `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
 - `x-publish.yml`: X投稿実行（Phase2）+ artifact保存（`workflow_dispatch`対応）
 
@@ -255,6 +288,11 @@ pytest -q
 - `SMTP_PASS`
 - `SMTP_FROM`
 - `LP_CHECKOUT_URL` (任意。設定した場合のみ購入導線が有効)
+- `STRIPE_SECRET_KEY`
+- `STRIPE_PRICE_ID`
+- `STRIPE_SUCCESS_URL`
+- `STRIPE_CANCEL_URL`
+- `STRIPE_WEBHOOK_SECRET`
 
 ## 外部アカウントが必要な手作業（LP公開）
 GitHub Pagesで公開する場合:
@@ -299,10 +337,40 @@ GitHub Pagesで公開する場合:
 ## 初期獲得オペ
 - 手順書: `docs/ops/initial-acquisition.md`
 
-## Stripe未導入時の購読者運用
-1. 管理者が `subscriber-add` で購読者を登録
-2. 解約/停止時は `subscriber-stop` で状態を `stopped` に変更
-3. `subscriber-list --json` で監査ログを取得
+## Stripe導入（Issue1）
+- `stripe-checkout-create` は Checkout Session URL を生成します。
+- `stripe-webhook-apply` は署名検証後に `subscribers` を同期します。
+  - `checkout.session.completed` -> `active`
+  - `invoice.payment_failed` / `customer.subscription.deleted` -> `stopped`
+- Webhookペイロードにemailが無い場合は、事前に記録した `customer_id -> email` マッピングで解決します。
+
+料金発生なしの検証（test mode）:
+1. Stripe Dashboardを `Test mode` に切り替える
+2. Product/Price(月額)を作成し `price_...` を取得
+3. 以下を設定して Checkout URL 生成
+```powershell
+$env:PYTHONPATH="src"
+$env:STRIPE_SECRET_KEY="sk_test_xxx"
+$env:STRIPE_PRICE_ID="price_xxx"
+$env:STRIPE_SUCCESS_URL="https://example.com/stripe/success"
+$env:STRIPE_CANCEL_URL="https://example.com/stripe/cancel"
+python -m bid_rss_mailer.main stripe-checkout-create --email buyer@example.com --keyword-sets all --plan stripe-monthly
+```
+4. 生成URLを `LP_CHECKOUT_URL` に設定
+5. Stripe CLIかDashboardのWebhook再送で `checkout.session.completed` を受信し、以下で反映
+```powershell
+$env:PYTHONPATH="src"
+$env:STRIPE_WEBHOOK_SECRET="whsec_xxx"
+python -m bid_rss_mailer.main stripe-webhook-apply --db-path data/app.db --payload .\event_checkout.json --signature "t=...,v1=..."
+python -m bid_rss_mailer.main subscriber-list --json
+```
+
+人間の手作業（本番前）:
+1. Stripe Dashboardで本番用 Product/Price を作成
+2. Webhook endpoint を公開URLで作成し `checkout.session.completed`, `invoice.payment_failed`, `customer.subscription.deleted` を購読
+3. `STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`, `STRIPE_WEBHOOK_SECRET` を GitHub Secrets へ登録
+4. `LP_CHECKOUT_URL` を本番Checkout URLへ更新
+5. `stripe-verify.yml` の `workflow_dispatch` 実行ログで同期を確認
 
 ## 購読者配信の仕様（Issue3）
 - 配信先は `subscribers.status=active` のみです。

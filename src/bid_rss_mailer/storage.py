@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS subscribers (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS stripe_customers (
+    customer_id TEXT PRIMARY KEY,
+    email_norm TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -383,3 +389,36 @@ class SQLiteStore:
             """
         ).fetchall()
         return [str(row["email"]) for row in rows]
+
+    def upsert_stripe_customer(
+        self,
+        *,
+        customer_id: str,
+        email_norm: str,
+        now_iso: str,
+    ) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO stripe_customers (
+                    customer_id, email_norm, updated_at
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(customer_id) DO UPDATE SET
+                    email_norm = excluded.email_norm,
+                    updated_at = excluded.updated_at
+                """,
+                (customer_id, email_norm, now_iso),
+            )
+
+    def email_norm_by_stripe_customer(self, customer_id: str) -> str | None:
+        row = self.connection.execute(
+            """
+            SELECT email_norm
+            FROM stripe_customers
+            WHERE customer_id = ?
+            """,
+            (customer_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["email_norm"])
