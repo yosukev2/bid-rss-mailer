@@ -85,6 +85,7 @@ keyword_sets:
 └─ .github/workflows/
    ├─ ci.yml
    ├─ daily-mail.yml
+   ├─ delivery-verify.yml
    ├─ lp-verify.yml
    ├─ subscribers-verify.yml
    ├─ x-draft.yml
@@ -126,6 +127,9 @@ Copy-Item .env.example .env
 - `X_PUBLISH_MODE` (任意。`manual` / `webhook` / `x_api_v2`。既定 `manual`)
 - `X_WEBHOOK_URL` (`webhook` モード時に必須)
 - `X_API_BEARER_TOKEN` (`x_api_v2` モード時に必須)
+- `SEND_ADMIN_COPY` (任意。購読者配信時に管理者へ監視コピーを送る。既定 `true`)
+- `MAIL_MAX_TOTAL_ITEMS` (任意。1通あたりの総件数上限。既定 `30`)
+- `UNSUBSCRIBE_CONTACT` (任意。メールフッタの配信停止連絡先。既定 `ADMIN_EMAIL`)
 
 PowerShell例:
 ```powershell
@@ -144,6 +148,9 @@ $env:X_DRAFT_OUTPUT_DIR="out/x-drafts"
 $env:X_PUBLISH_MODE="manual"
 $env:X_WEBHOOK_URL=""
 $env:X_API_BEARER_TOKEN=""
+$env:SEND_ADMIN_COPY="true"
+$env:MAIL_MAX_TOTAL_ITEMS="30"
+$env:UNSUBSCRIBE_CONTACT="admin@example.com"
 ```
 
 ## 実行コマンド
@@ -236,6 +243,7 @@ pytest -q
   - `workflow_dispatch` で `dry_run` と `mock_smtp` を選択可
 - `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
 - `subscribers-verify.yml`: subscriber DB/CLIの検証（`workflow_dispatch`対応）
+- `delivery-verify.yml`: active購読者配信 + 件数上限 + admin copy挙動の検証（`workflow_dispatch`対応）
 - `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
 - `x-publish.yml`: X投稿実行（Phase2）+ artifact保存（`workflow_dispatch`対応）
 
@@ -295,6 +303,12 @@ GitHub Pagesで公開する場合:
 1. 管理者が `subscriber-add` で購読者を登録
 2. 解約/停止時は `subscriber-stop` で状態を `stopped` に変更
 3. `subscriber-list --json` で監査ログを取得
+
+## 購読者配信の仕様（Issue3）
+- 配信先は `subscribers.status=active` のみです。
+- `SEND_ADMIN_COPY=true` の場合、管理者にも監視コピーを送信します。
+- `MAIL_MAX_TOTAL_ITEMS` で1通あたりの総件数上限を制御します（セット別上限は `keyword_sets.yaml`）。
+- メール末尾に免責と `UNSUBSCRIBE_CONTACT` を使った配信停止導線を付与します。
 
 ## 運用上の注意
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。

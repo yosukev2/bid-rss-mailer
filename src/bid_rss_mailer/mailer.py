@@ -44,6 +44,7 @@ def build_digest_body(
     keyword_sets: list[KeywordSetConfig],
     selected_by_set: dict[str, list[StoredScoredItem]],
     failures: list[SourceFailure],
+    unsubscribe_contact: str,
 ) -> str:
     lines: list[str] = []
     lines.append(f"実行時刻(JST): {now_jst:%Y-%m-%d %H:%M:%S}")
@@ -63,6 +64,12 @@ def build_digest_body(
         for failure in failures:
             lines.append(f"- {failure.source_id} ({failure.source_url}): {failure.error}")
         lines.append("")
+
+    lines.append("免責:")
+    lines.append("- 本メールは公式情報へのリンク参照を補助するものです。")
+    lines.append("- 応募可否・要件・締切は必ず公式ページで最終確認してください。")
+    lines.append(f"- 配信停止: {unsubscribe_contact} へ連絡してください。")
+    lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

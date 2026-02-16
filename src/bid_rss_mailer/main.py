@@ -46,6 +46,19 @@ def _parse_bool_env(key: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_positive_int_env(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{key} must be positive integer") from exc
+    if value <= 0:
+        raise ConfigError(f"{key} must be positive integer")
+    return value
+
+
 def _resolve_db_path(db_path_override: str | None) -> str:
     return (db_path_override or os.getenv("DB_PATH") or "data/app.db").strip()
 
@@ -133,6 +146,10 @@ def run_job(args: argparse.Namespace) -> int:
         db_path_override=args.db_path,
         require_smtp=not args.dry_run,
     )
+    max_total_items = _parse_positive_int_env("MAIL_MAX_TOTAL_ITEMS", 30)
+    send_admin_copy = _parse_bool_env("SEND_ADMIN_COPY", True)
+    unsubscribe_contact = (os.getenv("UNSUBSCRIBE_CONTACT") or settings.admin_email).strip()
+
     result = run_pipeline(
         sources_path=Path(args.sources),
         keyword_sets_path=Path(args.keywords),
@@ -140,15 +157,19 @@ def run_job(args: argparse.Namespace) -> int:
         admin_email=settings.admin_email,
         smtp_config=settings.smtp_config,
         dry_run=args.dry_run,
+        max_total_items=max_total_items,
+        send_admin_copy=send_admin_copy,
+        unsubscribe_contact=unsubscribe_contact,
     )
     selected_total = sum(len(records) for records in result.selected_by_set.values())
     LOGGER.info(
-        "run complete: run_id=%s fetched=%s selected=%s failures=%s digest_sent=%s dry_run=%s",
+        "run complete: run_id=%s fetched=%s selected=%s failures=%s digest_sent=%s recipients=%s dry_run=%s",
         result.run_id,
         result.fetched_count,
         selected_total,
         len(result.failures),
         result.digest_sent,
+        len(result.recipients),
         args.dry_run,
     )
     should_warn = bool(result.failures) or result.fetched_count == 0
