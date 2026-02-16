@@ -1,0 +1,80 @@
+name: delivery-verify
+
+on:
+  push:
+    branches:
+      - "feat/**"
+    paths:
+      - "src/bid_rss_mailer/main.py"
+      - "src/bid_rss_mailer/pipeline.py"
+      - "src/bid_rss_mailer/mailer.py"
+      - "src/bid_rss_mailer/storage.py"
+      - ".github/workflows/delivery-verify.yml"
+      - "README.md"
+      - ".env.example"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start mock SMTP server
+        run: |
+          python -m aiosmtpd -n -l 127.0.0.1:1025 > smtp.log 2>&1 &
+          echo $! > smtp.pid
+          sleep 2
+
+      - name: Seed subscribers and run delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DB_PATH="${GITHUB_WORKSPACE}/data/delivery-verify.db"
+          rm -f "$DB_PATH"
+
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-add --db-path "$DB_PATH" --email active@example.com --plan manual --keyword-sets all
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-add --db-path "$DB_PATH" --email stopped@example.com --plan manual --keyword-sets all
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-stop --db-path "$DB_PATH" --email stopped@example.com
+
+          export ADMIN_EMAIL="admin@example.local"
+          export SMTP_HOST="127.0.0.1"
+          export SMTP_PORT="1025"
+          export SMTP_USER=""
+          export SMTP_PASS=""
+          export SMTP_FROM="noreply@example.local"
+          export SMTP_STARTTLS="false"
+          export SEND_ADMIN_COPY="true"
+          export MAIL_MAX_TOTAL_ITEMS="30"
+          export UNSUBSCRIBE_CONTACT="support@example.local"
+
+          PYTHONPATH=src python -m bid_rss_mailer.main run --db-path "$DB_PATH" 2>&1 | tee run.log
+
+          python - <<'PY'
+          from pathlib import Path
+          content = Path("run.log").read_text(encoding="utf-8")
+          assert "digest_sent=True" in content
+          assert "recipients=2" in content
+          print("delivery_log_assertions=ok")
+          PY
+
+      - name: Upload delivery verification logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-verify
+          path: |
+            run.log
+            smtp.log
