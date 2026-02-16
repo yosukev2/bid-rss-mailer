@@ -1,0 +1,67 @@
+name: subscribers-verify
+
+on:
+  push:
+    branches:
+      - "feat/**"
+    paths:
+      - "src/bid_rss_mailer/main.py"
+      - "src/bid_rss_mailer/storage.py"
+      - "src/bid_rss_mailer/subscribers.py"
+      - ".github/workflows/subscribers-verify.yml"
+      - "README.md"
+      - ".env.example"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify subscriber CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_PATH="${GITHUB_WORKSPACE}/data/subscribers-verify.db"
+          rm -f "$DB_PATH"
+
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-add --db-path "$DB_PATH" --email user1@example.com --plan manual --keyword-sets all
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-add --db-path "$DB_PATH" --email user1@example.com --plan manual --keyword-sets all
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-add --db-path "$DB_PATH" --email user2@example.com --plan manual --keyword-sets set-a-it-ops-cloud,set-c-research-study
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-stop --db-path "$DB_PATH" --email user2@example.com
+
+          PYTHONPATH=src python -m bid_rss_mailer.main subscriber-list --db-path "$DB_PATH" --json > subscribers.json
+          cat subscribers.json
+
+          python - <<'PY'
+          import json
+          with open("subscribers.json", "r", encoding="utf-8") as f:
+              rows = json.load(f)
+          active = [row for row in rows if row["status"] == "active"]
+          stopped = [row for row in rows if row["status"] == "stopped"]
+          print(f"active_count={len(active)}")
+          print(f"stopped_count={len(stopped)}")
+          assert len(rows) == 2
+          assert len(active) == 1
+          assert len(stopped) == 1
+          PY
+
+      - name: Upload verification artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscribers-verify
+          path: subscribers.json

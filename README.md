@@ -69,6 +69,7 @@ keyword_sets:
 │  ├─ mailer.py
 │  ├─ config.py
 │  ├─ normalize.py
+│  ├─ subscribers.py
 │  ├─ x_draft.py
 │  └─ x_publish.py
 ├─ tests/
@@ -85,6 +86,7 @@ keyword_sets:
    ├─ ci.yml
    ├─ daily-mail.yml
    ├─ lp-verify.yml
+   ├─ subscribers-verify.yml
    ├─ x-draft.yml
    └─ x-publish.yml
 ```
@@ -197,6 +199,14 @@ $env:PYTHONPATH="src"
 python -m bid_rss_mailer.main x-publish --mode x_api_v2
 ```
 
+購読者管理（Stripe未導入期間の手動運用）:
+```powershell
+$env:PYTHONPATH="src"
+python -m bid_rss_mailer.main subscriber-add --email user1@example.com --plan manual --keyword-sets all
+python -m bid_rss_mailer.main subscriber-stop --email user1@example.com
+python -m bid_rss_mailer.main subscriber-list --json
+```
+
 ## LP（Issue4）
 ローカルでLPを確認:
 ```powershell
@@ -225,6 +235,7 @@ pytest -q
   - cron: `0 22 * * *` (UTC 22:00 = JST 翌日 07:00)
   - `workflow_dispatch` で `dry_run` と `mock_smtp` を選択可
 - `lp-verify.yml`: LP静的ページの検証 + artifact保存（`workflow_dispatch`対応）
+- `subscribers-verify.yml`: subscriber DB/CLIの検証（`workflow_dispatch`対応）
 - `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
 - `x-publish.yml`: X投稿実行（Phase2）+ artifact保存（`workflow_dispatch`対応）
 
@@ -279,6 +290,11 @@ GitHub Pagesで公開する場合:
 
 ## 初期獲得オペ
 - 手順書: `docs/ops/initial-acquisition.md`
+
+## Stripe未導入時の購読者運用
+1. 管理者が `subscriber-add` で購読者を登録
+2. 解約/停止時は `subscriber-stop` で状態を `stopped` に変更
+3. `subscriber-list --json` で監査ログを取得
 
 ## 運用上の注意
 - SQLiteはGitHub Actions上でキャッシュ復元して継続利用します。キャッシュが消えた場合は再送判定履歴がリセットされます。
