@@ -16,11 +16,13 @@ from bid_rss_mailer.storage import SQLiteStore
 from bid_rss_mailer.subscribers import (
     ALLOWED_SUBSCRIBER_STATUS,
     build_subscriber_input,
+    parse_keyword_sets,
     keyword_sets_from_json,
     keyword_sets_to_json,
     validate_email,
     validate_status,
 )
+from bid_rss_mailer.stripe_integration import apply_webhook_payload, create_checkout_session
 from bid_rss_mailer.x_draft import generate_x_draft
 from bid_rss_mailer.x_publish import (
     MODE_MANUAL,
@@ -56,6 +58,13 @@ def _parse_positive_int_env(key: str, default: int) -> int:
         raise ConfigError(f"{key} must be positive integer") from exc
     if value <= 0:
         raise ConfigError(f"{key} must be positive integer")
+    return value
+
+
+def _require_env(key: str) -> str:
+    value = (os.getenv(key) or "").strip()
+    if not value:
+        raise ConfigError(f"{key} is required")
     return value
 
 
@@ -349,6 +358,89 @@ def run_subscriber_list_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stripe_checkout_create_command(args: argparse.Namespace) -> int:
+    secret_key = _require_env("STRIPE_SECRET_KEY")
+    price_id = (args.price_id or os.getenv("STRIPE_PRICE_ID") or "").strip()
+    success_url = (args.success_url or os.getenv("STRIPE_SUCCESS_URL") or "").strip()
+    cancel_url = (args.cancel_url or os.getenv("STRIPE_CANCEL_URL") or "").strip()
+    if not price_id:
+        raise ConfigError("STRIPE_PRICE_ID is required")
+    if not success_url:
+        raise ConfigError("STRIPE_SUCCESS_URL is required")
+    if not cancel_url:
+        raise ConfigError("STRIPE_CANCEL_URL is required")
+
+    email_norm = validate_email(args.email)
+    plan = (args.plan or os.getenv("STRIPE_DEFAULT_PLAN") or "stripe-monthly").strip()
+    keyword_sets = parse_keyword_sets(
+        args.keyword_sets
+        or os.getenv("STRIPE_DEFAULT_KEYWORD_SETS")
+        or "all"
+    )
+    mock_mode = _parse_bool_env("STRIPE_MOCK_MODE", False)
+
+    result = create_checkout_session(
+        secret_key=secret_key,
+        price_id=price_id,
+        customer_email=email_norm,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        plan=plan,
+        keyword_sets=keyword_sets,
+        mock_mode=mock_mode,
+    )
+    LOGGER.info(
+        "stripe checkout created: session_id=%s email=%s mock_mode=%s",
+        result.session_id,
+        email_norm,
+        result.mock_mode,
+    )
+    print(result.checkout_url)
+    return 0
+
+
+def run_stripe_webhook_apply_command(args: argparse.Namespace) -> int:
+    payload_path = Path(args.payload)
+    payload = payload_path.read_bytes()
+    signature = (args.signature or "").strip() or None
+    verify_signature = not args.skip_signature_check and _parse_bool_env("STRIPE_VERIFY_SIGNATURE", True)
+    webhook_secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip() or None
+    default_plan = (os.getenv("STRIPE_DEFAULT_PLAN") or "stripe-monthly").strip()
+    default_keyword_sets = parse_keyword_sets(
+        os.getenv("STRIPE_DEFAULT_KEYWORD_SETS") or "all"
+    )
+
+    store = SQLiteStore(_resolve_db_path(args.db_path))
+    try:
+        store.initialize()
+        result = apply_webhook_payload(
+            store=store,
+            payload=payload,
+            signature_header=signature,
+            webhook_secret=webhook_secret,
+            verify_signature=verify_signature,
+            default_plan=default_plan,
+            default_keyword_sets=default_keyword_sets,
+        )
+    finally:
+        store.close()
+
+    LOGGER.info(
+        "stripe webhook applied: event=%s action=%s email=%s status=%s customer=%s verify_signature=%s",
+        result.event_type,
+        result.action,
+        result.email_norm,
+        result.status,
+        result.customer_id,
+        verify_signature,
+    )
+    print(
+        "event="
+        f"{result.event_type} action={result.action} email={result.email_norm} status={result.status}"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect RSS bids and send email digest.")
     parser.add_argument("--log-level", default="INFO", help="DEBUG/INFO/WARNING/ERROR")
@@ -421,6 +513,29 @@ def build_parser() -> argparse.ArgumentParser:
     subscriber_list_parser.add_argument("--status", default=None, choices=tuple(ALLOWED_SUBSCRIBER_STATUS))
     subscriber_list_parser.add_argument("--json", action="store_true")
     subscriber_list_parser.set_defaults(handler=run_subscriber_list_command)
+
+    stripe_checkout_parser = subparsers.add_parser(
+        "stripe-checkout-create",
+        help="Create Stripe checkout session URL for subscription purchase.",
+    )
+    stripe_checkout_parser.add_argument("--db-path", default=None)
+    stripe_checkout_parser.add_argument("--email", required=True)
+    stripe_checkout_parser.add_argument("--price-id", default=None)
+    stripe_checkout_parser.add_argument("--success-url", default=None)
+    stripe_checkout_parser.add_argument("--cancel-url", default=None)
+    stripe_checkout_parser.add_argument("--plan", default=None)
+    stripe_checkout_parser.add_argument("--keyword-sets", default=None)
+    stripe_checkout_parser.set_defaults(handler=run_stripe_checkout_create_command)
+
+    stripe_webhook_parser = subparsers.add_parser(
+        "stripe-webhook-apply",
+        help="Verify and apply Stripe webhook payload to subscribers DB.",
+    )
+    stripe_webhook_parser.add_argument("--db-path", default=None)
+    stripe_webhook_parser.add_argument("--payload", required=True)
+    stripe_webhook_parser.add_argument("--signature", default=None)
+    stripe_webhook_parser.add_argument("--skip-signature-check", action="store_true")
+    stripe_webhook_parser.set_defaults(handler=run_stripe_webhook_apply_command)
 
     return parser
 
