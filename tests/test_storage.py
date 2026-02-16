@@ -185,3 +185,23 @@ def test_upsert_subscriber_is_idempotent(tmp_path) -> None:
         assert rows[0]["email_norm"] == "user@example.com"
     finally:
         store.close()
+
+
+def test_upsert_stripe_customer_is_idempotent(tmp_path) -> None:
+    db_path = tmp_path / "app.db"
+    store = SQLiteStore(str(db_path))
+    store.initialize()
+    try:
+        store.upsert_stripe_customer(
+            customer_id="cus_123",
+            email_norm="first@example.com",
+            now_iso="2026-02-16T00:00:00+00:00",
+        )
+        store.upsert_stripe_customer(
+            customer_id="cus_123",
+            email_norm="second@example.com",
+            now_iso="2026-02-16T00:01:00+00:00",
+        )
+        assert store.email_norm_by_stripe_customer("cus_123") == "second@example.com"
+    finally:
+        store.close()

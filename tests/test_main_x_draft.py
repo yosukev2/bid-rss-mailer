@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
 
 from bid_rss_mailer import main as main_module
 
@@ -99,6 +100,49 @@ def test_subscriber_add_failure_triggers_failure_notification(monkeypatch, tmp_p
             "manual",
             "--keyword-sets",
             "all",
+        ]
+    )
+
+    assert exit_code == 1
+    assert sent["count"] == 1
+    assert "[ERROR]" in sent["subject"]
+
+
+def test_stripe_webhook_failure_triggers_failure_notification(monkeypatch, tmp_path) -> None:
+    sent = {"count": 0, "subject": ""}
+
+    def _fake_send_text_email(**kwargs):  # type: ignore[no-untyped-def]
+        sent["count"] += 1
+        sent["subject"] = kwargs["subject"]
+
+    payload_path = Path(tmp_path) / "event.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "id": "evt_test",
+                "type": "checkout.session.completed",
+                "data": {"object": {"customer_email": "buyer@example.com"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_PORT", "1025")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(main_module, "send_text_email", _fake_send_text_email)
+
+    db_path = Path(tmp_path) / "app.db"
+    exit_code = main_module.main(
+        [
+            "stripe-webhook-apply",
+            "--db-path",
+            str(db_path),
+            "--payload",
+            str(payload_path),
         ]
     )
 
