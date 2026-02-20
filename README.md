@@ -135,9 +135,13 @@ Copy-Item .env.example .env
 - `STRIPE_MOCK_MODE` (任意。既定 `false`。`true`で外部通信なし検証)
 - `LP_PUBLIC_URL` (X投稿文に入れるLP公開URL)
 - `X_DRAFT_OUTPUT_DIR` (任意。X投稿文の出力先。既定 `out/x-drafts`)
-- `X_PUBLISH_MODE` (任意。`manual` / `webhook` / `x_api_v2`。既定 `manual`)
-- `X_WEBHOOK_URL` (`webhook` モード時に必須)
-- `X_API_BEARER_TOKEN` (`x_api_v2` モード時に必須)
+- `X_PUBLISH_MODE` (任意。`auto` / `manual` / `webhook` / `x_api_v2`。既定 `auto`)
+- `X_WEBHOOK_URL` (`webhook` 経路利用時に必須)
+- `X_USER_ACCESS_TOKEN` (推奨。ユーザーコンテキスト投稿トークン)
+- `X_API_BEARER_TOKEN` (互換用。環境により投稿不可の場合あり)
+- `X_PUBLISH_ON_MISSING_ROUTE` (任意。`fail` / `dry-run-success`。既定 `fail`)
+- `X_PUBLISH_SCHEDULE_MODE` (任意。`dry_run` / `live`。既定 `dry_run`)
+- `X_PUBLISH_SCHEDULE_FAIL_SOFT` (任意。`true` のとき設定不足時にdry-runへフォールバック)
 - `SEND_ADMIN_COPY` (任意。購読者配信時に管理者へ監視コピーを送る。既定 `true`)
 - `MAIL_MAX_TOTAL_ITEMS` (任意。1通あたりの総件数上限。既定 `30`)
 - `UNSUBSCRIBE_CONTACT` (任意。メールフッタの配信停止連絡先。既定 `ADMIN_EMAIL`)
@@ -165,9 +169,13 @@ $env:STRIPE_VERIFY_SIGNATURE="true"
 $env:STRIPE_MOCK_MODE="false"
 $env:LP_PUBLIC_URL="https://example.com/lp"
 $env:X_DRAFT_OUTPUT_DIR="out/x-drafts"
-$env:X_PUBLISH_MODE="manual"
+$env:X_PUBLISH_MODE="auto"
 $env:X_WEBHOOK_URL=""
+$env:X_USER_ACCESS_TOKEN=""
 $env:X_API_BEARER_TOKEN=""
+$env:X_PUBLISH_ON_MISSING_ROUTE="fail"
+$env:X_PUBLISH_SCHEDULE_MODE="dry_run"
+$env:X_PUBLISH_SCHEDULE_FAIL_SOFT="true"
 $env:SEND_ADMIN_COPY="true"
 $env:MAIL_MAX_TOTAL_ITEMS="30"
 $env:UNSUBSCRIBE_CONTACT="admin@example.com"
@@ -212,18 +220,18 @@ $env:PYTHONPATH="src"
 python -m bid_rss_mailer.main x-draft --top-n 5 --force
 ```
 
-X投稿実行（Phase2。mode切替）:
+X投稿実行（Phase2。安全運用）:
 ```powershell
 $env:PYTHONPATH="src"
-python -m bid_rss_mailer.main x-publish --mode manual
+python -m bid_rss_mailer.main x-publish --dry-run --mode auto
 ```
 ```powershell
 $env:PYTHONPATH="src"
-python -m bid_rss_mailer.main x-publish --mode webhook
+python -m bid_rss_mailer.main x-publish --live --mode webhook --on-missing-route fail
 ```
 ```powershell
 $env:PYTHONPATH="src"
-python -m bid_rss_mailer.main x-publish --mode x_api_v2
+python -m bid_rss_mailer.main x-publish --live --mode x_api_v2 --on-missing-route fail
 ```
 
 購読者管理（Stripe未導入期間の手動運用）:
@@ -278,7 +286,7 @@ pytest -q
 - `delivery-verify.yml`: active購読者配信 + 件数上限 + admin copy挙動の検証（`workflow_dispatch`対応）
 - `stripe-verify.yml`: Checkout作成(mock) + Webhook同期の検証（`workflow_dispatch`対応）
 - `x-draft.yml`: X投稿文（Phase1）生成 + artifact保存（`workflow_dispatch`対応）
-- `x-publish.yml`: X投稿実行（Phase2）+ artifact保存（`workflow_dispatch`対応）
+- `x-publish.yml`: X投稿実行（Phase2, `dry_run/live`選択）+ artifact保存（`workflow_dispatch`対応）
 
 必要なSecrets:
 - `ADMIN_EMAIL`
@@ -287,12 +295,22 @@ pytest -q
 - `SMTP_USER`
 - `SMTP_PASS`
 - `SMTP_FROM`
+- `LP_PUBLIC_URL`
 - `LP_CHECKOUT_URL` (任意。設定した場合のみ購入導線が有効)
 - `STRIPE_SECRET_KEY`
 - `STRIPE_PRICE_ID`
 - `STRIPE_SUCCESS_URL`
 - `STRIPE_CANCEL_URL`
 - `STRIPE_WEBHOOK_SECRET`
+- `X_WEBHOOK_URL` (webhook経路を使う場合)
+- `X_USER_ACCESS_TOKEN` (直投稿の推奨トークン)
+- `X_API_BEARER_TOKEN` (互換経路)
+
+推奨Variables:
+- `LP_PUBLIC_URL` (Secret未設定時のフォールバック)
+- `X_PUBLISH_MODE` (`auto` 推奨)
+- `X_PUBLISH_SCHEDULE_MODE` (`dry_run` 推奨。liveにする場合はSecrets投入後)
+- `X_PUBLISH_SCHEDULE_FAIL_SOFT` (`true` 推奨)
 
 ## 外部アカウントが必要な手作業（LP公開）
 GitHub Pagesで公開する場合:
@@ -318,21 +336,49 @@ GitHub Pagesで公開する場合:
 3. Xへ手動投稿
 
 外部要件（Phase2）:
-1. X APIアプリ作成・権限付与
-2. 投稿用トークン発行とGitHub Secrets登録
-3. 自動投稿ワークフローへ接続（Issue6で実装）
+1. X Developerアカウント/アプリを用意し、投稿可能権限を確認
+2. 投稿トークン（推奨: ユーザーコンテキスト）を発行してGitHub Secrets登録
+3. `x-publish-phase2` を `dry_run -> live` の順で段階導入
 
 ## X導線 Phase2（投稿実行）
-- `x-publish` は mode を切り替えて実行します。
-  - `manual`: 外部投稿せず、実行記録のみ作成
-  - `webhook`: `X_WEBHOOK_URL` へ投稿文JSONを送信（Zapier/IFTTT連携向け）
-  - `x_api_v2`: X API `POST /2/tweets` を直接実行（`X_API_BEARER_TOKEN` 必須）
-- 同日重複投稿はDBで抑止されます。再実行は `--force` を使います。
+- `x-publish` は **`--dry-run` または `--live` を必須** とします。
+  - `--dry-run`: 常に投稿しない。exit 0 で完走し、以下をログ出力します。
+    - 投稿予定テキスト
+    - 投稿理由/経路選定ロジック
+    - 下書きファイルパス
+    - 同日重複判定結果
+  - `--live`: 明示時のみ投稿系処理を許可します。
+- 経路選定 (`--mode auto` 推奨):
+  - 経路A `webhook`: `X_WEBHOOK_URL` があれば webhook へ委譲
+  - 経路B `x_api_v2`: webhookが無い場合、`X_USER_ACCESS_TOKEN`（推奨）または `X_API_BEARER_TOKEN` があるときのみ直接投稿
+- A/Bとも未設定時:
+  - `--on-missing-route fail` (既定): 不足設定を表示して exit code 2
+  - `--on-missing-route dry-run-success`: 投稿せず dry-run 成功扱い
+- 安全装置:
+  - 文字数上限(280)チェック
+  - 空投稿抑止
+  - URL乱発抑止（基本はLPリンクのみ）
+  - 同一JST日付の重複投稿防止（idempotency）
+- DB記録:
+  - `x_posts` に `draft_id / post_date_jst / text_hash / status / post_id / failure_reason` を保存
 
-外部要件で詰まる場合の前進手順:
-1. まず `manual` で毎朝の運用を固定
-2. 次に `webhook` 連携で自動化（X API不要）
-3. 最後に `x_api_v2` に切り替える
+推奨導入順:
+1. `--dry-run` で毎日完走を確認
+2. `webhook` 経路で投稿委譲
+3. 必要なら `x_api_v2` 直投稿へ切替
+
+X側準備（コピペ手順）:
+1. X Developer Portal で App 作成（投稿に必要なプラン/権限を確認）
+2. ユーザーコンテキストの投稿トークンを発行（推奨: `X_USER_ACCESS_TOKEN`）
+3. GitHub Secrets に `X_WEBHOOK_URL` または `X_USER_ACCESS_TOKEN` / `X_API_BEARER_TOKEN` を登録
+4. `workflow_dispatch` で `x-publish-phase2` を `dry_run` で実行
+5. `live` に切替える場合は `on_missing_route=fail` で不足設定を先に解消
+
+Actions運用ポリシー:
+- `x-publish.yml` の `workflow_dispatch` は `execution_mode` で `dry_run/live` を選択します。
+- `schedule` は既定 `dry_run`（`X_PUBLISH_SCHEDULE_MODE=dry_run`）です。
+- `X_PUBLISH_SCHEDULE_MODE=live` でも、`X_PUBLISH_SCHEDULE_FAIL_SOFT=true` のときは設定不足で自動的に dry-run へフォールバックします。
+- 勝手にlive投稿しないため、Secrets未投入状態では投稿が実行されない設計です。
 
 ## 初期獲得オペ
 - 手順書: `docs/ops/initial-acquisition.md`

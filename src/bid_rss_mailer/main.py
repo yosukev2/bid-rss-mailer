@@ -25,9 +25,13 @@ from bid_rss_mailer.subscribers import (
 from bid_rss_mailer.stripe_integration import apply_webhook_payload, create_checkout_session
 from bid_rss_mailer.x_draft import generate_x_draft
 from bid_rss_mailer.x_publish import (
+    MODE_AUTO,
     MODE_MANUAL,
     MODE_WEBHOOK,
     MODE_X_API_V2,
+    ON_MISSING_ROUTE_DRY_RUN_SUCCESS,
+    ON_MISSING_ROUTE_FAIL,
+    LivePublishConfigError,
     publish_x_post,
 )
 
@@ -36,7 +40,7 @@ LOGGER = logging.getLogger("bid_rss_mailer")
 
 @dataclass(frozen=True)
 class RuntimeSettings:
-    admin_email: str
+    admin_email: str | None
     db_path: str
     smtp_config: SmtpConfig | None
 
@@ -72,9 +76,13 @@ def _resolve_db_path(db_path_override: str | None) -> str:
     return (db_path_override or os.getenv("DB_PATH") or "data/app.db").strip()
 
 
-def load_runtime_settings(db_path_override: str | None, require_smtp: bool) -> RuntimeSettings:
+def load_runtime_settings(
+    db_path_override: str | None,
+    require_smtp: bool,
+    require_admin: bool = True,
+) -> RuntimeSettings:
     admin_email = (os.getenv("ADMIN_EMAIL") or "").strip()
-    if not admin_email:
+    if require_admin and not admin_email:
         raise ConfigError("ADMIN_EMAIL is required")
 
     db_path = (db_path_override or os.getenv("DB_PATH") or "data/app.db").strip()
@@ -111,7 +119,11 @@ def load_runtime_settings(db_path_override: str | None, require_smtp: bool) -> R
     if require_smtp and smtp_config is None:
         raise ConfigError("SMTP env is required")
 
-    return RuntimeSettings(admin_email=admin_email, db_path=db_path, smtp_config=smtp_config)
+    return RuntimeSettings(
+        admin_email=admin_email or None,
+        db_path=db_path,
+        smtp_config=smtp_config,
+    )
 
 
 def configure_logging(log_level: str) -> None:
@@ -127,6 +139,7 @@ def run_self_test(args: argparse.Namespace) -> int:
     settings = load_runtime_settings(
         db_path_override=args.db_path,
         require_smtp=not args.skip_smtp,
+        require_admin=not args.skip_smtp,
     )
     store = SQLiteStore(settings.db_path)
     try:
@@ -138,6 +151,9 @@ def run_self_test(args: argparse.Namespace) -> int:
 
 
 def _notify_failure(settings: RuntimeSettings, message: str) -> None:
+    if not settings.admin_email:
+        LOGGER.error("Cannot send failure notification: ADMIN_EMAIL is missing")
+        return
     if settings.smtp_config is None:
         LOGGER.error("Cannot send failure notification: SMTP config is missing")
         return
@@ -154,7 +170,10 @@ def run_job(args: argparse.Namespace) -> int:
     settings = load_runtime_settings(
         db_path_override=args.db_path,
         require_smtp=not args.dry_run,
+        require_admin=True,
     )
+    if not settings.admin_email:
+        raise ConfigError("ADMIN_EMAIL is required")
     max_total_items = _parse_positive_int_env("MAIL_MAX_TOTAL_ITEMS", 30)
     send_admin_copy = _parse_bool_env("SEND_ADMIN_COPY", True)
     unsubscribe_contact = (os.getenv("UNSUBSCRIBE_CONTACT") or settings.admin_email).strip()
@@ -213,6 +232,7 @@ def run_x_draft_command(args: argparse.Namespace) -> int:
     settings = load_runtime_settings(
         db_path_override=args.db_path,
         require_smtp=False,
+        require_admin=False,
     )
     lp_url = (args.lp_url or os.getenv("LP_PUBLIC_URL") or os.getenv("APP_BASE_URL") or "").strip()
     if not lp_url:
@@ -244,34 +264,68 @@ def run_x_draft_command(args: argparse.Namespace) -> int:
 
 
 def run_x_publish_command(args: argparse.Namespace) -> int:
+    if args.live and args.dry_run:
+        raise ConfigError("x-publish: --live and --dry-run cannot be used together")
+    if not args.live and not args.dry_run:
+        raise ConfigError("x-publish: choose either --dry-run or --live")
+
     settings = load_runtime_settings(
         db_path_override=args.db_path,
         require_smtp=False,
+        require_admin=False,
     )
 
     store = SQLiteStore(settings.db_path)
     try:
         store.initialize()
-        result = publish_x_post(
-            store=store,
-            draft_dir=Path(args.draft_dir),
-            receipt_dir=Path(args.receipt_dir),
-            mode=args.mode,
-            force=args.force,
-            webhook_url=(os.getenv("X_WEBHOOK_URL") or "").strip(),
-            bearer_token=(os.getenv("X_API_BEARER_TOKEN") or "").strip(),
-        )
+        try:
+            result = publish_x_post(
+                store=store,
+                draft_dir=Path(args.draft_dir),
+                receipt_dir=Path(args.receipt_dir),
+                mode=args.mode,
+                force=args.force,
+                webhook_url=(os.getenv("X_WEBHOOK_URL") or "").strip(),
+                x_user_access_token=(os.getenv("X_USER_ACCESS_TOKEN") or "").strip(),
+                x_api_bearer_token=(os.getenv("X_API_BEARER_TOKEN") or "").strip(),
+                lp_url=(os.getenv("LP_PUBLIC_URL") or os.getenv("APP_BASE_URL") or "").strip(),
+                dry_run=args.dry_run,
+                live=args.live,
+                on_missing_route=args.on_missing_route,
+            )
+        except LivePublishConfigError as exc:
+            missing = ", ".join(exc.missing_requirements) if exc.missing_requirements else "(none)"
+            print(f"x-publish config error: {exc.detail}")
+            print(f"missing_requirements={missing}")
+            return 2
     finally:
         store.close()
 
     LOGGER.info(
-        "x-publish complete: post_date_jst=%s mode=%s status=%s skipped=%s receipt=%s",
+        "x-publish complete: post_date_jst=%s mode=%s route=%s dry_run=%s status=%s skipped=%s receipt=%s",
         result.post_date_jst,
         result.mode,
+        result.route,
+        result.dry_run,
         result.status,
         result.skipped,
         result.receipt_path,
     )
+    LOGGER.info(
+        "x-publish detail: selection_reason=%s duplicate_check=%s draft_path=%s draft_id=%s text_hash=%s missing=%s",
+        result.selection_reason,
+        result.duplicate_check_result,
+        result.draft_path,
+        result.draft_id,
+        result.text_hash,
+        ",".join(result.missing_requirements),
+    )
+    print("planned_text_begin")
+    print(result.planned_text)
+    print("planned_text_end")
+    print(f"selection_reason={result.selection_reason}")
+    print(f"draft_path={result.draft_path}")
+    print(f"duplicate_check={result.duplicate_check_result}")
     print(result.receipt_path)
     return 0
 
@@ -473,15 +527,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     x_publish_parser = subparsers.add_parser(
         "x-publish",
-        help="Publish today's X draft (manual/webhook/x_api_v2).",
+        help="Publish today's X draft (auto/manual/webhook/x_api_v2) with --dry-run or --live.",
     )
     x_publish_parser.add_argument("--db-path", default=None)
     x_publish_parser.add_argument("--draft-dir", default=os.getenv("X_DRAFT_OUTPUT_DIR", "out/x-drafts"))
     x_publish_parser.add_argument("--receipt-dir", default="out/x-publish")
+    on_missing_route_default = (
+        os.getenv("X_PUBLISH_ON_MISSING_ROUTE")
+        or ON_MISSING_ROUTE_FAIL
+    ).strip()
+    if on_missing_route_default not in (ON_MISSING_ROUTE_FAIL, ON_MISSING_ROUTE_DRY_RUN_SUCCESS):
+        on_missing_route_default = ON_MISSING_ROUTE_FAIL
     x_publish_parser.add_argument(
         "--mode",
-        choices=(MODE_MANUAL, MODE_WEBHOOK, MODE_X_API_V2),
-        default=MODE_MANUAL,
+        choices=(MODE_AUTO, MODE_MANUAL, MODE_WEBHOOK, MODE_X_API_V2),
+        default=MODE_AUTO,
+    )
+    x_publish_parser.add_argument("--dry-run", action="store_true")
+    x_publish_parser.add_argument("--live", action="store_true")
+    x_publish_parser.add_argument(
+        "--on-missing-route",
+        choices=(ON_MISSING_ROUTE_FAIL, ON_MISSING_ROUTE_DRY_RUN_SUCCESS),
+        default=on_missing_route_default,
     )
     x_publish_parser.add_argument("--force", action="store_true")
     x_publish_parser.set_defaults(handler=run_x_publish_command)
@@ -554,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
             settings = load_runtime_settings(
                 db_path_override=getattr(args, "db_path", None),
                 require_smtp=False,
+                require_admin=False,
             )
             _notify_failure(settings, traceback.format_exc())
         except Exception:  # noqa: BLE001

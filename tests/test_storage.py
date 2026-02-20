@@ -149,12 +149,23 @@ def test_record_x_post_and_has_x_post_for_date(tmp_path) -> None:
             post_date_jst="2026-02-16",
             posted_at="2026-02-16T01:00:00+00:00",
             mode="manual",
+            route="manual",
             status="manual_ready",
+            draft_id=1,
+            text_hash="abc123",
+            post_id="post-1",
+            failure_reason=None,
             response_id=None,
             response_body="ok",
             overwrite=False,
         )
         assert store.has_x_post_for_date("2026-02-16") is True
+        row = store.x_post_for_date("2026-02-16")
+        assert row is not None
+        assert row["route"] == "manual"
+        assert row["draft_id"] == 1
+        assert row["text_hash"] == "abc123"
+        assert row["post_id"] == "post-1"
     finally:
         store.close()
 
