@@ -17,25 +17,37 @@ on:
     - cron: "10 22 * * *" # UTC 22:10 = JST 07:10
   workflow_dispatch:
     inputs:
-      mode:
-        description: "manual / webhook / x_api_v2"
+      execution_mode:
+        description: "dry_run / live"
         required: true
-        default: "manual"
+        default: "dry_run"
         type: choice
         options:
-          - manual
+          - dry_run
+          - live
+      mode:
+        description: "auto / webhook / x_api_v2 / manual"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
           - webhook
           - x_api_v2
+          - manual
       force:
         description: "overwrite same-day publish record"
         required: true
         default: false
         type: boolean
-      mock_smtp:
-        description: "use mock SMTP for verification"
+      on_missing_route:
+        description: "fail / dry-run-success"
         required: true
-        default: true
-        type: boolean
+        default: "fail"
+        type: choice
+        options:
+          - fail
+          - dry-run-success
 
 jobs:
   publish:
@@ -64,130 +76,104 @@ jobs:
           restore-keys: |
             bid-rss-mailer-db-
 
-      - name: Resolve run mode
-        id: mode
+      - name: Resolve execution plan
+        id: plan
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-            echo "force=${{ inputs.force }}" >> "$GITHUB_OUTPUT"
-            echo "mock_smtp=${{ inputs.mock_smtp }}" >> "$GITHUB_OUTPUT"
+            run_mode="${{ inputs.execution_mode }}"
+            mode="${{ inputs.mode }}"
+            force="${{ inputs.force }}"
+            on_missing_route="${{ inputs.on_missing_route }}"
+            fail_soft="false"
           elif [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "mode=manual" >> "$GITHUB_OUTPUT"
-            echo "force=true" >> "$GITHUB_OUTPUT"
-            echo "mock_smtp=true" >> "$GITHUB_OUTPUT"
+            run_mode="dry_run"
+            mode="auto"
+            force="true"
+            on_missing_route="dry-run-success"
+            fail_soft="true"
           else
-            echo "mode=${{ vars.X_PUBLISH_MODE || 'manual' }}" >> "$GITHUB_OUTPUT"
-            echo "force=false" >> "$GITHUB_OUTPUT"
-            echo "mock_smtp=false" >> "$GITHUB_OUTPUT"
+            run_mode="${{ vars.X_PUBLISH_SCHEDULE_MODE || 'dry_run' }}"
+            mode="${{ vars.X_PUBLISH_MODE || 'auto' }}"
+            force="false"
+            fail_soft="${{ vars.X_PUBLISH_SCHEDULE_FAIL_SOFT || 'true' }}"
+            on_missing_route="fail"
+            if [[ "$run_mode" == "live" && "$fail_soft" == "true" ]]; then
+              on_missing_route="dry-run-success"
+            fi
           fi
-
-      - name: Start mock SMTP server
-        if: steps.mode.outputs.mock_smtp == 'true'
-        shell: bash
-        run: |
-          python -m aiosmtpd -n -l 127.0.0.1:1025 > smtp.log 2>&1 &
-          echo $! > smtp.pid
-          sleep 2
+          echo "run_mode=$run_mode" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "force=$force" >> "$GITHUB_OUTPUT"
+          echo "on_missing_route=$on_missing_route" >> "$GITHUB_OUTPUT"
+          echo "fail_soft=$fail_soft" >> "$GITHUB_OUTPUT"
+          echo "execution_plan: event=${{ github.event_name }} run_mode=$run_mode mode=$mode force=$force on_missing_route=$on_missing_route fail_soft=$fail_soft"
 
       - name: Generate X draft (pre-step)
         shell: bash
         env:
-          SECRET_ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-          SECRET_SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SECRET_SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SECRET_SMTP_USER: ${{ secrets.SMTP_USER }}
-          SECRET_SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SECRET_SMTP_FROM: ${{ secrets.SMTP_FROM }}
           SECRET_LP_PUBLIC_URL: ${{ secrets.LP_PUBLIC_URL }}
           VAR_LP_PUBLIC_URL: ${{ vars.LP_PUBLIC_URL }}
         run: |
           set -euo pipefail
           export DB_PATH="${GITHUB_WORKSPACE}/data/app.db"
           export X_DRAFT_OUTPUT_DIR="${GITHUB_WORKSPACE}/out/x-drafts"
+          export LP_PUBLIC_URL="${SECRET_LP_PUBLIC_URL:-${VAR_LP_PUBLIC_URL:-https://example.com/lp}}"
 
-          if [[ "${{ steps.mode.outputs.mock_smtp }}" == "true" ]]; then
-            export ADMIN_EMAIL="admin@example.local"
-            export SMTP_HOST="127.0.0.1"
-            export SMTP_PORT="1025"
-            export SMTP_USER=""
-            export SMTP_PASS=""
-            export SMTP_FROM="noreply@example.local"
-            export SMTP_STARTTLS="false"
-            export LP_PUBLIC_URL="https://example.com/lp"
-          else
-            export ADMIN_EMAIL="${SECRET_ADMIN_EMAIL}"
-            export SMTP_HOST="${SECRET_SMTP_HOST}"
-            export SMTP_PORT="${SECRET_SMTP_PORT}"
-            export SMTP_USER="${SECRET_SMTP_USER}"
-            export SMTP_PASS="${SECRET_SMTP_PASS}"
-            export SMTP_FROM="${SECRET_SMTP_FROM}"
-            export LP_PUBLIC_URL="${SECRET_LP_PUBLIC_URL:-${VAR_LP_PUBLIC_URL:-}}"
-
-            for required_key in ADMIN_EMAIL SMTP_HOST SMTP_PORT SMTP_FROM LP_PUBLIC_URL; do
-              if [[ -z "${!required_key}" ]]; then
-                echo "Missing required value for ${required_key}" >&2
-                exit 1
-              fi
-            done
+          cmd=(python -m bid_rss_mailer.main x-draft --db-path "$DB_PATH" --output-dir "$X_DRAFT_OUTPUT_DIR")
+          if [[ "${{ steps.plan.outputs.force }}" == "true" ]]; then
+            cmd+=(--force)
           fi
+          PYTHONPATH=src "${cmd[@]}"
 
-          PYTHONPATH=src python -m bid_rss_mailer.main x-draft --db-path "$DB_PATH" --output-dir "$X_DRAFT_OUTPUT_DIR"
+          ls -la "$X_DRAFT_OUTPUT_DIR"
+          latest_file=$(ls -1t "$X_DRAFT_OUTPUT_DIR" | head -n 1)
+          echo "latest_file=$latest_file"
 
       - name: Publish X draft
         shell: bash
         env:
-          SECRET_ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-          SECRET_SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SECRET_SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SECRET_SMTP_USER: ${{ secrets.SMTP_USER }}
-          SECRET_SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SECRET_SMTP_FROM: ${{ secrets.SMTP_FROM }}
           SECRET_X_WEBHOOK_URL: ${{ secrets.X_WEBHOOK_URL }}
+          VAR_X_WEBHOOK_URL: ${{ vars.X_WEBHOOK_URL }}
+          SECRET_X_USER_ACCESS_TOKEN: ${{ secrets.X_USER_ACCESS_TOKEN }}
           SECRET_X_API_BEARER_TOKEN: ${{ secrets.X_API_BEARER_TOKEN }}
         run: |
           set -euo pipefail
           export DB_PATH="${GITHUB_WORKSPACE}/data/app.db"
           export X_DRAFT_OUTPUT_DIR="${GITHUB_WORKSPACE}/out/x-drafts"
+          export X_WEBHOOK_URL="${SECRET_X_WEBHOOK_URL:-${VAR_X_WEBHOOK_URL:-}}"
+          export X_USER_ACCESS_TOKEN="${SECRET_X_USER_ACCESS_TOKEN:-}"
+          export X_API_BEARER_TOKEN="${SECRET_X_API_BEARER_TOKEN:-}"
 
-          if [[ "${{ steps.mode.outputs.mock_smtp }}" == "true" ]]; then
-            export ADMIN_EMAIL="admin@example.local"
-            export SMTP_HOST="127.0.0.1"
-            export SMTP_PORT="1025"
-            export SMTP_USER=""
-            export SMTP_PASS=""
-            export SMTP_FROM="noreply@example.local"
-            export SMTP_STARTTLS="false"
-          else
-            export ADMIN_EMAIL="${SECRET_ADMIN_EMAIL}"
-            export SMTP_HOST="${SECRET_SMTP_HOST}"
-            export SMTP_PORT="${SECRET_SMTP_PORT}"
-            export SMTP_USER="${SECRET_SMTP_USER}"
-            export SMTP_PASS="${SECRET_SMTP_PASS}"
-            export SMTP_FROM="${SECRET_SMTP_FROM}"
-          fi
-
-          mode="${{ steps.mode.outputs.mode }}"
-          if [[ "$mode" == "webhook" ]]; then
-            export X_WEBHOOK_URL="${SECRET_X_WEBHOOK_URL}"
-            if [[ -z "${X_WEBHOOK_URL}" ]]; then
-              echo "Missing X_WEBHOOK_URL for webhook mode" >&2
-              exit 1
-            fi
-          fi
-          if [[ "$mode" == "x_api_v2" ]]; then
-            export X_API_BEARER_TOKEN="${SECRET_X_API_BEARER_TOKEN}"
-            if [[ -z "${X_API_BEARER_TOKEN}" ]]; then
-              echo "Missing X_API_BEARER_TOKEN for x_api_v2 mode" >&2
-              exit 1
-            fi
-          fi
-
-          cmd=(python -m bid_rss_mailer.main x-publish --db-path "$DB_PATH" --draft-dir "$X_DRAFT_OUTPUT_DIR" --receipt-dir "$GITHUB_WORKSPACE/out/x-publish" --mode "$mode")
-          if [[ "${{ steps.mode.outputs.force }}" == "true" ]]; then
+          cmd=(python -m bid_rss_mailer.main x-publish --db-path "$DB_PATH" --draft-dir "$X_DRAFT_OUTPUT_DIR" --receipt-dir "$GITHUB_WORKSPACE/out/x-publish" --mode "${{ steps.plan.outputs.mode }}" --on-missing-route "${{ steps.plan.outputs.on_missing_route }}")
+          if [[ "${{ steps.plan.outputs.force }}" == "true" ]]; then
             cmd+=(--force)
           fi
-          PYTHONPATH=src "${cmd[@]}"
+          if [[ "${{ steps.plan.outputs.run_mode }}" == "live" ]]; then
+            cmd+=(--live)
+          else
+            cmd+=(--dry-run)
+          fi
+
+          set +e
+          PYTHONPATH=src "${cmd[@]}" 2>&1 | tee publish.log
+          status="$?"
+          set -e
+
+          if [[ "$status" -eq 2 && "${{ steps.plan.outputs.fail_soft }}" == "true" ]]; then
+            echo "live configuration incomplete; fallback to dry-run"
+            fallback=(python -m bid_rss_mailer.main x-publish --db-path "$DB_PATH" --draft-dir "$X_DRAFT_OUTPUT_DIR" --receipt-dir "$GITHUB_WORKSPACE/out/x-publish" --mode auto --dry-run --on-missing-route dry-run-success)
+            if [[ "${{ steps.plan.outputs.force }}" == "true" ]]; then
+              fallback+=(--force)
+            fi
+            PYTHONPATH=src "${fallback[@]}" 2>&1 | tee -a publish.log
+            status="$?"
+          fi
+
+          if [[ "$status" -ne 0 ]]; then
+            exit "$status"
+          fi
 
           ls -la "$GITHUB_WORKSPACE/out/x-publish"
           latest_receipt=$(ls -1t "$GITHUB_WORKSPACE/out/x-publish" | head -n 1)
@@ -195,18 +181,12 @@ jobs:
           echo "-----"
           cat "$GITHUB_WORKSPACE/out/x-publish/$latest_receipt"
 
-      - name: Upload publish artifact
+      - name: Upload publish artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: x-publish-output
           path: |
             out/x-drafts
             out/x-publish
-
-      - name: Show mock SMTP log
-        if: always() && steps.mode.outputs.mock_smtp == 'true'
-        shell: bash
-        run: |
-          if [[ -f smtp.log ]]; then
-            tail -n 200 smtp.log
-          fi
+            publish.log

@@ -73,7 +73,7 @@ jobs:
           else
             echo "top_n=5" >> "$GITHUB_OUTPUT"
             echo "force=false" >> "$GITHUB_OUTPUT"
-            echo "mock_smtp=false" >> "$GITHUB_OUTPUT"
+            echo "mock_smtp=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Start mock SMTP server

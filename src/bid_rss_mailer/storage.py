@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS x_posts (
     post_date_jst TEXT NOT NULL UNIQUE,
     posted_at TEXT NOT NULL,
     mode TEXT NOT NULL,
+    route TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
+    draft_id INTEGER NULL,
+    text_hash TEXT NULL,
+    post_id TEXT NULL,
+    failure_reason TEXT NULL,
     response_id TEXT NULL,
     response_body TEXT NULL
 );
@@ -84,6 +89,27 @@ class SQLiteStore:
     def initialize(self) -> None:
         with self.connection:
             self.connection.executescript(SCHEMA_SQL)
+        self._ensure_schema_migrations()
+
+    def _ensure_schema_migrations(self) -> None:
+        self._ensure_x_posts_columns()
+
+    def _ensure_x_posts_columns(self) -> None:
+        rows = self.connection.execute("PRAGMA table_info(x_posts)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        required: dict[str, str] = {
+            "route": "TEXT NOT NULL DEFAULT ''",
+            "draft_id": "INTEGER NULL",
+            "text_hash": "TEXT NULL",
+            "post_id": "TEXT NULL",
+            "failure_reason": "TEXT NULL",
+        }
+        with self.connection:
+            for column, definition in required.items():
+                if column not in existing:
+                    self.connection.execute(
+                        f"ALTER TABLE x_posts ADD COLUMN {column} {definition}"
+                    )
 
     def purge_older_than(self, *, days: int, now: datetime | None = None) -> None:
         if days <= 0:
@@ -206,6 +232,16 @@ class SQLiteStore:
         ).fetchone()
         return row is not None
 
+    def x_draft_for_date(self, post_date_jst: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT id, post_date_jst, generated_at, top_n, item_count, lp_url, content
+            FROM x_drafts
+            WHERE post_date_jst = ?
+            """,
+            (post_date_jst,),
+        ).fetchone()
+
     def record_x_draft(
         self,
         *,
@@ -279,39 +315,85 @@ class SQLiteStore:
         ).fetchone()
         return row is not None
 
+    def x_post_for_date(self, post_date_jst: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            """
+            SELECT
+                id,
+                post_date_jst,
+                posted_at,
+                mode,
+                route,
+                status,
+                draft_id,
+                text_hash,
+                post_id,
+                failure_reason,
+                response_id,
+                response_body
+            FROM x_posts
+            WHERE post_date_jst = ?
+            """,
+            (post_date_jst,),
+        ).fetchone()
+
     def record_x_post(
         self,
         *,
         post_date_jst: str,
         posted_at: str,
         mode: str,
+        route: str = "",
         status: str,
-        response_id: str | None,
+        draft_id: int | None = None,
+        text_hash: str | None = None,
+        post_id: str | None = None,
+        failure_reason: str | None = None,
+        response_id: str | None = None,
         response_body: str | None,
         overwrite: bool = False,
     ) -> None:
+        resolved_post_id = post_id or response_id
+        resolved_response_id = response_id or post_id
         if overwrite:
             sql = """
                 INSERT INTO x_posts (
-                    post_date_jst, posted_at, mode, status, response_id, response_body
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    post_date_jst, posted_at, mode, route, status, draft_id, text_hash, post_id, failure_reason, response_id, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(post_date_jst) DO UPDATE SET
                     posted_at = excluded.posted_at,
                     mode = excluded.mode,
+                    route = excluded.route,
                     status = excluded.status,
+                    draft_id = excluded.draft_id,
+                    text_hash = excluded.text_hash,
+                    post_id = excluded.post_id,
+                    failure_reason = excluded.failure_reason,
                     response_id = excluded.response_id,
                     response_body = excluded.response_body
             """
         else:
             sql = """
                 INSERT INTO x_posts (
-                    post_date_jst, posted_at, mode, status, response_id, response_body
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    post_date_jst, posted_at, mode, route, status, draft_id, text_hash, post_id, failure_reason, response_id, response_body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         with self.connection:
             self.connection.execute(
                 sql,
-                (post_date_jst, posted_at, mode, status, response_id, response_body),
+                (
+                    post_date_jst,
+                    posted_at,
+                    mode,
+                    route,
+                    status,
+                    draft_id,
+                    text_hash,
+                    resolved_post_id,
+                    failure_reason,
+                    resolved_response_id,
+                    response_body,
+                ),
             )
 
     def upsert_subscriber(
